@@ -23,7 +23,9 @@ pub(super) struct RunSession {
     pub(super) atlas_root: PathBuf,
     pub(super) git_head: Option<String>,
     pub(super) last: Option<LastUpdate>,
-    pub(super) store: Store,
+    /// Shared with the page tasks, which write their page the moment it is
+    /// generated; the store serialises access internally.
+    pub(super) store: Arc<Store>,
     _lock: RunLock,
 }
 
@@ -52,6 +54,10 @@ pub(super) struct RunCounts {
     pub(super) template_pages: usize,
     /// Pages whose previous body was kept because regenerating them failed.
     pub(super) pages_kept: usize,
+    /// Chunks of the pages this run landed (reused ones included).
+    pub(super) chunks: usize,
+    /// Rel paths of the pages whose previous body was kept.
+    pub(super) kept_pages: Vec<String>,
 }
 
 pub async fn run_init_or_update(
@@ -125,12 +131,12 @@ impl RunSession {
         };
 
         let lock = RunLock::acquire(&data_dir, &run_id)?;
-        let store = Store::open(&ctx.cfg.db_path(&ctx.repo_root))?;
+        let store = Arc::new(Store::open(&ctx.cfg.db_path(&ctx.repo_root))?);
         // The lock is exclusive, so any leftover `running` row belongs to a dead process.
-        if let Ok(n) = store.fail_stale_runs(0) {
-            if n > 0 {
-                tracing::warn!("reconciled {n} stale run(s) still marked as running");
-            }
+        if let Ok(n) = store.fail_stale_runs(0)
+            && n > 0
+        {
+            tracing::warn!("reconciled {n} stale run(s) still marked as running");
         }
         let atlas_root = ctx.cfg.atlas_root(&ctx.repo_root);
         let last = read_last_update(&atlas_root);
@@ -241,7 +247,6 @@ fn spawn_heartbeat(data_dir: &Path, run_id: &str) {
 
 fn report_scan(scan: &RepoScan) {
     let files = scan.files.iter().filter(|f| f.language.is_some()).count();
-    tracing::info!("扫描完成：{files} 源文件 · 语言 {:?}", scan.languages);
     println!("[atlas] 扫描 {files} 个源文件 · 语言 {:?}", scan.languages);
 }
 

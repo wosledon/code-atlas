@@ -3,14 +3,14 @@
 //! `atlas init|update` runs through [`run_init_or_update`], which chains the
 //! phase modules: `plan` decides the page set, `prepare` fingerprints it for
 //! incremental reuse, `generate` fans the pages out to `pagegen` (one model call
-//! per page, LLM or template), `write`
-//! persists pages/claims/chunks, `graph` seeds the entity graph and
-//! `maintenance` finishes the run. Supporting modules: `evidence` (prompt
-//! assembly), `brief` (per-page outline + depth gate), `prompt` (the two
-//! generation prompts), `plan_modules`
-//! (repository layout detection) and `template` (offline fallback).
-//! Everything the CLI and the server use is re-exported here so
-//! `atlas_core::pipeline::*` stays a stable API.
+//! per page, LLM or template) and each page task persists itself through
+//! `write`, `graph` seeds the entity graph and `maintenance` finishes the run.
+//! Supporting modules: `evidence` (prompt assembly), `brief` (per-page outline
+//! and the depth gate), `prompt` (the two generation prompts), `plan_modules`
+//! (repository layout detection) and `template` (offline fallback). `progress`
+//! owns the run bars and the plain log lines and hands them to the CLI through
+//! [`with_suspended_bars`]. Everything the CLI and the server use is re-exported
+//! here so `atlas_core::pipeline::*` stays a stable API.
 use crate::git;
 use crate::lock::RunLock;
 use crate::markdown::{self, FrontMatter};
@@ -36,6 +36,7 @@ mod pagegen;
 mod plan;
 mod plan_modules;
 mod prepare;
+mod progress;
 mod prompt;
 mod run;
 mod template;
@@ -47,5 +48,6 @@ mod tests;
 
 pub use maintenance::{open_store, reindex, run_check};
 pub use plan::{preview_plan, PlannedPage};
+pub use progress::with_suspended_bars;
 pub use run::run_init_or_update;
 pub use types::{LastUpdate, PipelineCtx, RunResult};

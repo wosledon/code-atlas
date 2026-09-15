@@ -5,12 +5,12 @@
 //! [`super::generate`]; this module only answers "what body does this page get".
 
 use super::brief::depth_gaps;
+use super::progress::PageBar;
 use super::prompt::{expand_messages, generate_messages};
 use super::template::template_page_body;
 use super::types::{GeneratedPageWithMeta, PageJob, PageOutcome};
 use super::*;
 
-use indicatif::ProgressBar;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -85,14 +85,9 @@ impl PageGen {
             .and_then(|s| s.clone())
     }
 
-    /// Produce the body of one page and report progress on `sp` (`n` is its
+    /// Produce the body of one page and report progress on `pb` (`n` is its
     /// 1-based position in the plan).
-    pub(super) async fn run(
-        &self,
-        n: usize,
-        job: PageJob,
-        sp: &ProgressBar,
-    ) -> GeneratedPageWithMeta {
+    pub(super) async fn run(&self, n: usize, job: PageJob, pb: &PageBar) -> GeneratedPageWithMeta {
         let PageJob {
             page,
             evidence,
@@ -104,7 +99,7 @@ impl PageGen {
         let started = std::time::Instant::now();
 
         if let Some(body) = reuse_body {
-            sp.finish_with_message(format!(
+            pb.done(format!(
                 "↻ {n}/{total} {} · 复用（证据未变）",
                 page.rel_path
             ));
@@ -118,16 +113,18 @@ impl PageGen {
             };
         }
 
-        sp.set_message(format!("撰页 {n}/{total} {}", page.rel_path));
-        tracing::info!("[{n}/{total}] 生成 {}", page.rel_path);
+        pb.note(format!("撰页 {n}/{total} {}", page.rel_path));
 
         if !self.use_llm {
+            // Every page of a key-less run is a template, so it counts as "no
+            // model output" in the run summary.
+            self.counters.fail.fetch_add(1, Ordering::Relaxed);
             // Keep whatever the last real run produced: a key-less run must not
             // replace model-written pages with structural templates.
             if keep_body_on_failure {
-                return self.keep_previous(&page, &fingerprint, None, "模板模式", sp, n, started);
+                return self.keep_previous(&page, &fingerprint, None, "模板模式", pb, n, started);
             }
-            sp.finish_with_message(format!("✓ {n}/{total} {} · 模板", page.rel_path));
+            pb.done(format!("✓ {n}/{total} {} · 模板", page.rel_path));
             return self.templated(page, fingerprint, None);
         }
 
@@ -135,9 +132,17 @@ impl PageGen {
             Ok((usage, body)) if body.trim().chars().count() < 80 => {
                 self.counters.fail.fetch_add(1, Ordering::Relaxed);
                 if keep_body_on_failure {
-                    return self.keep_previous(&page, &fingerprint, Some(usage), "输出过短", sp, n, started);
+                    return self.keep_previous(
+                        &page,
+                        &fingerprint,
+                        Some(usage),
+                        "输出过短",
+                        pb,
+                        n,
+                        started,
+                    );
                 }
-                sp.finish_with_message(format!(
+                pb.done(format!(
                     "~ {n}/{total} {} · 模板回退 · {:.1}s",
                     page.rel_path,
                     started.elapsed().as_secs_f64()
@@ -154,7 +159,7 @@ impl PageGen {
                         &evidence,
                         body,
                         usage,
-                        sp,
+                        pb,
                         n,
                         total,
                     )
@@ -166,7 +171,7 @@ impl PageGen {
                     self.counters.expanded.fetch_add(1, Ordering::Relaxed);
                 }
                 self.counters.ok.fetch_add(1, Ordering::Relaxed);
-                sp.finish_with_message(format!(
+                pb.done(format!(
                     "✓ {n}/{total} {} · tokens {}+{} · {:.1}s{}",
                     page.rel_path,
                     usage.0,
@@ -198,12 +203,12 @@ impl PageGen {
                         &fingerprint,
                         None,
                         &format!("生成失败 · {short}"),
-                        sp,
+                        pb,
                         n,
                         started,
                     );
                 }
-                sp.finish_with_message(format!(
+                pb.done(format!(
                     "! {n}/{total} {} · 回退模板 · {short}",
                     page.rel_path
                 ));
@@ -239,12 +244,12 @@ impl PageGen {
         fingerprint: &str,
         usage: Option<(i64, i64, i64)>,
         label: &str,
-        sp: &ProgressBar,
+        pb: &PageBar,
         n: usize,
         started: std::time::Instant,
     ) -> GeneratedPageWithMeta {
         self.counters.kept.fetch_add(1, Ordering::Relaxed);
-        sp.finish_with_message(format!(
+        pb.done(format!(
             "≣ {n}/{} {} · {label} · 保留上一版 · {:.1}s",
             self.total_pages,
             page.rel_path,
@@ -343,7 +348,7 @@ async fn deepen_page(
     evidence: &str,
     body: String,
     usage: (i64, i64, i64),
-    sp: &ProgressBar,
+    pb: &PageBar,
     n: usize,
     total_pages: u64,
 ) -> (String, (i64, i64, i64), bool) {
@@ -351,16 +356,11 @@ async fn deepen_page(
     if gaps.is_empty() {
         return (body, usage, false);
     }
-    sp.set_message(format!(
+    pb.note(format!(
         "扩写 {n}/{total_pages} {} · {} 项待补",
         page.rel_path,
         gaps.len()
     ));
-    tracing::info!(
-        "[{n}/{total_pages}] 深度门未过（{} 项），扩写 {}",
-        gaps.len(),
-        page.rel_path
-    );
     match expand_page_with_llm(llm, evidence, page, cfg, tools, &body, &gaps).await {
         Ok((extra, revised)) => {
             let total = (

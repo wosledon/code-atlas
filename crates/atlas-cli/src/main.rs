@@ -1,7 +1,37 @@
 use anyhow::Result;
 use atlas_core::{pipeline, AtlasConfig};
 use clap::{Parser, Subcommand};
+use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
+use tracing_subscriber::fmt::MakeWriter;
+
+/// Logs are written to stderr **with the progress bars parked first**, so a log
+/// line never lands in the middle of a bar redraw. stdout stays reserved for a
+/// command's actual output.
+#[derive(Clone, Copy)]
+struct ProgressAwareStderr;
+
+impl<'a> MakeWriter<'a> for ProgressAwareStderr {
+    type Writer = ProgressAwareStderr;
+    fn make_writer(&'a self) -> Self::Writer {
+        *self
+    }
+}
+
+impl Write for ProgressAwareStderr {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        pipeline::with_suspended_bars(|| {
+            let mut err = std::io::stderr().lock();
+            err.write_all(buf)?;
+            err.flush()?;
+            Ok(buf.len())
+        })
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        pipeline::with_suspended_bars(|| std::io::stderr().flush())
+    }
+}
 
 #[derive(Parser, Debug)]
 #[command(name = "atlas", version, about = "Code Atlas — living wiki, knowledge graph & KB")]
@@ -78,6 +108,8 @@ enum Cmd {
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
+        .with_ansi(std::io::stderr().is_terminal())
+        .with_writer(ProgressAwareStderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),

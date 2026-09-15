@@ -39,6 +39,20 @@ pub(crate) struct GeneratedPageWithMeta {
     pub(crate) outcome: PageOutcome,
 }
 
+/// What persisting one page did. Produced by the page's own task and merged
+/// into the run totals by the caller, so the summary never depends on the order
+/// in which the pages happened to finish.
+pub(crate) struct PageReport {
+    pub(crate) rel_path: String,
+    /// `(prompt_tokens, completion_tokens, latency_ms)` spent on this page.
+    pub(crate) usage: Option<(i64, i64, i64)>,
+    pub(crate) outcome: PageOutcome,
+    /// Chunks now stored for the page.
+    pub(crate) chunks: usize,
+    /// The stored split was still current, so no re-chunking was needed.
+    pub(crate) reused_chunks: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(non_snake_case)]
 pub struct LastUpdate {

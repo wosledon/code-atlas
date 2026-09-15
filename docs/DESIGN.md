@@ -886,7 +886,15 @@ atlas init-config          # 写 atlas.toml.example
 - 已验证（复用收敛，本轮）：离线严格 stub 上连续跑 `atlas update`，输入不变时第 N 轮 **0 次 LLM 调用**（`[atlas] 17 页证据未变，复用上一版正文（跳过 LLM）` + 桩计数 `chat/chunks` 不再增长），页 md 文件逐字节不变（只有 `atlas/.claims/*.json` 与 `.last-update.json` 随 run 更新，二者都在 `SKIP_DIRS` 里）；把 `kb.chunk.target_tokens` 512→256 后 `atlas reindex` 落 `structural|hybrid|256|llm=false`、再 `update` 重建为 `llm-semantic|hybrid|256|llm=true`（签名门生效）。单测：`scaffold::agents_pointer_is_idempotent`、`scan::state_files_are_skipped`、`config::atlas_maintained_files_are_ignored_by_the_scan`、`pipeline::reused_body_round_trips_through_write_and_read`、提示词盐与 chunk 签名回归。**已验证（clean-start 收敛，本轮）**：全新仓库先 `init`（此时仓里没有 `AGENTS.md`，由 init 收尾写出）再 `update`，第 2 轮仍为 0 次 LLM 调用（修复前该场景因 `AGENTS.md` 新增使 16 个非模块页指纹全变、多花 32 次调用）。
 - 已验证（模块化，本轮）：`atlas-kb` 由 255 行单文件拆为 `spec`/`structural`/`semantic`/`persist` + 16 行门面 `lib.rs`，`atlas-core` 的配置 env 覆盖抽到 `config/env.rs`，公开 API 与行为不变（全量测试全绿、离线 stub 端到端复验通过）。
 - 已验证（OpenAI 兼容协议，本轮）：回传 assistant `tool_calls` 时必须带 `"type":"function"`，否则用过工具的页第二轮起被 StepFun 判 400（`llm http 400 Bad Request`）；现在 `ToolCallPayload.kind` 默认 `function`（单测 + 严格 stub 的 payload 校验，`reject=0`）。错误信息改为 body 优先（`llm http 400: <body 前 400 字符> @ <url>`），瞬时错误（408/409/425/429/5xx/传输失败）按 `400ms×(n+1)²` 退避重试，工具回合失败自动退回无工具重试；回退模板的页把指纹标成 `{fp}+template`，下一轮不会被误当作「已生成」复用。
+- 已验证（进度与即时落盘，本轮）：离线 stub（`STUB_DELAY=2`、17 页、`concurrency=5`）上跑 `atlas init`，`atlas/` 下的 md 在 +4.5s / +10.5s / +16.5s / +22.6s **分批落盘**（每批 5 页，即「生成完一页立刻写一页」），最后才写 `README.md` / `index.md`；重定向到文件的日志 88 行、`CR=0`、无 spinner 帧、无 ANSI 转义（改造前是同一条进度反复逐帧打印）。同一副本上 `ATLAS_PROGRESS=bars` 强制画条同样 exit 0（验证悬挂钩子与防重入不死锁）；随后 `atlas update` 0.3s 结束、**0 次 LLM 调用**（桩 `chat/tool_rounds/chunks` 计数不变），落盘行全为「未变化 · chunks 3 复用」。
 - 差距：向量检索未实现（仅 FTS5+LIKE）；`hybrid` 目前等价 `llm-semantic`（未做「先结构再微调」）；工具是只读（无 write/patch/MCP `atlas_*` 工具面）；`ATLAS_PROVIDER=host-agent` 仍走模板回退；`clippy` 仍留少量历史风格提示（`collapsible_if` / `too_many_arguments`），非本次拆分引入；`depth_gaps` 的门槛目前只在单测、模板模式与离线 stub（结构指标达标即通过）上验证过，本机无真实 API key，真实中文 LLM 输出上的误伤率待观察。
+
+### L.9 进度与终端输出契约
+
+- **逐页流水线落盘：** 「生成」与「落盘」不再是两个阶段——每页是一个独立任务（在飞页数受 `llm.concurrency` 限制），**该页任务自己**跑完「撰页/扩写 → 写 md → 建索引 → chunk → 关联模块」，主循环只汇总计数。所以运行中就能看到 `atlas/` 与索引持续增长（不再出现「页面都生成完了、落盘条却停在 0/N」），中断也不丢已完成页：进程被杀后 DB 里已落盘的页与用量都在，下一轮 `update` 只补没做完的页（`prune_missing_pages` 与 `fail_stale_runs` 保证不留幽灵状态）。
+- **落盘行语义：** 每页落盘后一行，后缀区分三种结果——写入新正文 `· chunks N（llm-semantic|structural）`；指纹未变、跳过 LLM 与重新分块 `· 未变化 · chunks N 复用`；生成失败但仓里有旧版可留 `· 生成失败，保留上一版`。收尾两行汇总：`生成 X / 失败 Y / 深度重写 Z / 复用 R / 共 N` 与 `落盘 M 页 · 未变化 U · chunks C · 保留上一版 K`（保留上一版表示该页这一轮没换成更好的正文，`--ci` 会因此失败）。
+- **TTY 自适应：** 仅当 stdout 与 stderr 都是终端时才画 indicatif 进度条；输出被重定向（写日志、CI、`| tee`）时自动降级为**每事件一行**的 `[atlas] …` 日志，同时关掉 tracing 的 ANSI 颜色——indicatif 只能在终端里原地重绘，非终端下逐帧输出就是满屏半成品帧（旧版「终端显示有问题」的根因）。`ATLAS_PROGRESS=plain|off|0` / `bars|on|1` 可强制其一。
+- **互不覆盖：** 进度条存活期间，任何非进度输出都先经 `MultiProgress::suspend`（`Progress::line` / `PageBar`）；`tracing` 通过 CLI 的 `ProgressAwareStderr` 写入器走同一钩子 `pipeline::with_suspended_bars`，并用 thread-local 防重入（在悬挂区内再写日志不会二次加锁死锁）。CLI 侧不再重复打印 pipeline 的 INFO 行（扫描、规划各只留一条 `[atlas]` 输出），避免同一信息出现两遍。
 
 ---
 
