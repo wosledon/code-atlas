@@ -1,5 +1,10 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import mermaid from "mermaid";
+import {
+  cleanupMermaidArtifacts,
+  mermaidErrorBrief,
+  repairMermaid,
+} from "../lib/mermaid";
 
 mermaid.initialize({
   startOnLoad: false,
@@ -234,23 +239,43 @@ function renderInline(text: string): ReactNode[] {
 }
 
 function MermaidBlock({ code }: { code: string }) {
-  const ref = useRef<HTMLDivElement>(null);
   const [svg, setSvg] = useState<string>("");
   const [err, setErr] = useState<string | null>(null);
+  const [repaired, setRepaired] = useState(false);
   const id = useMemo(() => `mmd-${Math.random().toString(36).slice(2, 9)}`, []);
 
   useEffect(() => {
     let cancelled = false;
+    const show = (markup: string, wasRepaired: boolean) => {
+      if (cancelled) return;
+      setSvg(markup);
+      setErr(null);
+      setRepaired(wasRepaired);
+    };
     (async () => {
+      let failure: unknown;
       try {
-        const { svg } = await mermaid.render(id, code);
-        if (!cancelled) {
-          setSvg(svg);
-          setErr(null);
-        }
+        show((await mermaid.render(id, code)).svg, false);
+        return;
       } catch (e) {
-        if (!cancelled) setErr(String(e));
+        failure = e;
       }
+      // Authored source failed: retry once with quoted labels / renamed ids.
+      const fix = repairMermaid(code);
+      if (fix.edits > 0) {
+        try {
+          show((await mermaid.render(`${id}r`, fix.code)).svg, true);
+          cleanupMermaidArtifacts(id);
+          return;
+        } catch {
+          cleanupMermaidArtifacts(`${id}r`);
+        }
+      }
+      cleanupMermaidArtifacts(id);
+      if (cancelled) return;
+      setSvg("");
+      setRepaired(false);
+      setErr(mermaidErrorBrief(failure));
     })();
     return () => {
       cancelled = true;
@@ -259,35 +284,53 @@ function MermaidBlock({ code }: { code: string }) {
 
   if (err) {
     return (
-      <pre
+      <div
         style={{
           background: "#FFF7F7",
           border: "1px solid #F0C4C4",
-          padding: 12,
           borderRadius: 10,
-          fontSize: 12,
-          overflow: "auto",
+          padding: "10px 12px",
+          margin: "14px 0 20px",
         }}
       >
-        Mermaid 解析失败，原文：\n{code}
-      </pre>
+        <div style={{ fontSize: 12, color: "#B3261E", marginBottom: 8 }}>
+          Mermaid 解析失败：{err}
+        </div>
+        <pre
+          style={{
+            margin: 0,
+            fontSize: 12,
+            overflow: "auto",
+            color: "#5B6470",
+            fontFamily: '"IBM Plex Mono", ui-monospace, monospace',
+          }}
+        >
+          {code}
+        </pre>
+      </div>
     );
   }
 
   return (
-    <div
-      ref={ref}
-      style={{
-        margin: "14px 0 20px",
-        padding: 16,
-        borderRadius: 14,
-        background: "#FBFCFE",
-        border: "1px solid #E4E9F0",
-        overflow: "auto",
-        display: "flex",
-        justifyContent: "center",
-      }}
-      dangerouslySetInnerHTML={{ __html: svg }}
-    />
+    <div style={{ margin: "14px 0 20px" }}>
+      <div
+        style={{
+          padding: 16,
+          borderRadius: 14,
+          background: "#FBFCFE",
+          border: "1px solid #E4E9F0",
+          overflow: "auto",
+          display: "flex",
+          justifyContent: "center",
+          minHeight: 32,
+        }}
+        dangerouslySetInnerHTML={{ __html: svg }}
+      />
+      {repaired && (
+        <div style={{ fontSize: 11, color: "#8A94A6", marginTop: 6 }}>
+          已自动修正该图的 mermaid 语法（原文有未加引号的标签或保留字节点 id）
+        </div>
+      )}
+    </div>
   );
 }

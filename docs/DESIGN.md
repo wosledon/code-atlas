@@ -887,6 +887,7 @@ atlas init-config          # 写 atlas.toml.example
 - 已验证（模块化，本轮）：`atlas-kb` 由 255 行单文件拆为 `spec`/`structural`/`semantic`/`persist` + 16 行门面 `lib.rs`，`atlas-core` 的配置 env 覆盖抽到 `config/env.rs`，公开 API 与行为不变（全量测试全绿、离线 stub 端到端复验通过）。
 - 已验证（OpenAI 兼容协议，本轮）：回传 assistant `tool_calls` 时必须带 `"type":"function"`，否则用过工具的页第二轮起被 StepFun 判 400（`llm http 400 Bad Request`）；现在 `ToolCallPayload.kind` 默认 `function`（单测 + 严格 stub 的 payload 校验，`reject=0`）。错误信息改为 body 优先（`llm http 400: <body 前 400 字符> @ <url>`），瞬时错误（408/409/425/429/5xx/传输失败）按 `400ms×(n+1)²` 退避重试，工具回合失败自动退回无工具重试；回退模板的页把指纹标成 `{fp}+template`，下一轮不会被误当作「已生成」复用。
 - 已验证（进度与即时落盘，本轮）：离线 stub（`STUB_DELAY=2`、17 页、`concurrency=5`）上跑 `atlas init`，`atlas/` 下的 md 在 +4.5s / +10.5s / +16.5s / +22.6s **分批落盘**（每批 5 页，即「生成完一页立刻写一页」），最后才写 `README.md` / `index.md`；重定向到文件的日志 88 行、`CR=0`、无 spinner 帧、无 ANSI 转义（改造前是同一条进度反复逐帧打印）。同一副本上 `ATLAS_PROGRESS=bars` 强制画条同样 exit 0（验证悬挂钩子与防重入不死锁）；随后 `atlas update` 0.3s 结束、**0 次 LLM 调用**（桩 `chat/tool_rounds/chunks` 计数不变），落盘行全为「未变化 · chunks 3 复用」。
+- 已验证（mermaid，本轮）：真实浏览器 + vite dev + mermaid 12.0.0 对仓内 `atlas/` 的 23 个图逐块跑 `mermaid.parse/render`：修复前 5 个失败（保留字 id 3 / `/` 开头标签 1 / 含 `()` 1），`repairMermaid` 后 **23/23 渲染出 SVG**，5 个原失败块全部救回、18 个原本正常的图 `edits=0`（零触碰）、二次修复稳定（不再产生新编辑）；阅读器页面实测 `03-模块详解/crates-atlas-core.md`（12 节点 11 条边，`graph.rs`/`seed_graph` 文本保留）等 5 个原失败页 `failures:0 / repaired:1`，`02-系统设计/整体架构.md` 无回归（`0/0`）。回退面板另用临时坏图页验证：2 个不可修复块 → 0 个 SVG + 2 个面板，`<pre>` 显示原文且换行为真实换行（验后已删该临时页）。`cargo test --workspace` 43 通过（含新增 `brief_demands_parsable_mermaid`）、`npx tsc -b` 通过。
 - 差距：向量检索未实现（仅 FTS5+LIKE）；`hybrid` 目前等价 `llm-semantic`（未做「先结构再微调」）；工具是只读（无 write/patch/MCP `atlas_*` 工具面）；`ATLAS_PROVIDER=host-agent` 仍走模板回退；`clippy` 仍留少量历史风格提示（`collapsible_if` / `too_many_arguments`），非本次拆分引入；`depth_gaps` 的门槛目前只在单测、模板模式与离线 stub（结构指标达标即通过）上验证过，本机无真实 API key，真实中文 LLM 输出上的误伤率待观察。
 
 ### L.9 进度与终端输出契约
@@ -895,6 +896,18 @@ atlas init-config          # 写 atlas.toml.example
 - **落盘行语义：** 每页落盘后一行，后缀区分三种结果——写入新正文 `· chunks N（llm-semantic|structural）`；指纹未变、跳过 LLM 与重新分块 `· 未变化 · chunks N 复用`；生成失败但仓里有旧版可留 `· 生成失败，保留上一版`。收尾两行汇总：`生成 X / 失败 Y / 深度重写 Z / 复用 R / 共 N` 与 `落盘 M 页 · 未变化 U · chunks C · 保留上一版 K`（保留上一版表示该页这一轮没换成更好的正文，`--ci` 会因此失败）。
 - **TTY 自适应：** 仅当 stdout 与 stderr 都是终端时才画 indicatif 进度条；输出被重定向（写日志、CI、`| tee`）时自动降级为**每事件一行**的 `[atlas] …` 日志，同时关掉 tracing 的 ANSI 颜色——indicatif 只能在终端里原地重绘，非终端下逐帧输出就是满屏半成品帧（旧版「终端显示有问题」的根因）。`ATLAS_PROGRESS=plain|off|0` / `bars|on|1` 可强制其一。
 - **互不覆盖：** 进度条存活期间，任何非进度输出都先经 `MultiProgress::suspend`（`Progress::line` / `PageBar`）；`tracing` 通过 CLI 的 `ProgressAwareStderr` 写入器走同一钩子 `pipeline::with_suspended_bars`，并用 thread-local 防重入（在悬挂区内再写日志不会二次加锁死锁）。CLI 侧不再重复打印 pipeline 的 INFO 行（扫描、规划各只留一条 `[atlas]` 输出），避免同一信息出现两遍。
+
+### L.10 mermaid 渲染契约（阅读器）
+
+**失败先修，再报错（只读不改源文件）。** 生成的图曾经整块变成「解析失败」红字，根因不是 mermaid 版本，而是模型写出的三种合法但脆弱的语法（已用真实 mermaid 12 对仓内 23 个图逐块复现）：
+
+1. **节点 id 用了 mermaid 保留字**——`graph["graph.rs<br/>seed_graph"]` 里的 `graph` 被词法器当成图类型关键字（同类还有 `end` / `subgraph` / `class` / `classDef` / `style` / `click` / `linkStyle` / `direction` / `default`）。
+2. **未加引号的标签以 `/` 开头**——`U[/api/health /api/pages]` 被解析成「平行四边形」起始定界符 `[/`（`a/x.rs` 里的 `/` 在中间则没问题）。
+3. **未加引号的标签含 `(` / `)` / `"`**——`C[serve()]`、`-->|serve()|` 直接语法错误。
+
+`web/src/lib/mermaid.ts` 的 `repairMermaid(code)` 在**解析失败之后**才介入：逐行扫描 flowchart，① 给未加引号的 `|...|` 边标签补引号；② 只在「后面紧跟形状定界符 / 前后有箭头 / 位于 `-->` 目标位」时才把命中保留字的 id 改名（`graph` → `graph_n`），因此不会误改标签文本；③ 给 `[]`/`()`/`{}`/`[[`/`((`/`{{`/`([`/`[(` 等形状内容按需加引号，内部 `"` 转义为 `#quot;`；`%%`、`style`/`classDef`/`click`/`linkStyle`/`direction`/`subgraph`/`end` 等指令行跳过，非 flowchart 原样返回。修好且渲染成功时图下给一行 11px 灰字提示「已自动修正…」；修不动（例如标签没闭合）才退回红字面板：`Mermaid 解析失败：<错误摘要>` + 等宽 `<pre>` 展示**原始**源码（此前 JSX 里 `\n` 是字面量，整块挤成一行）。
+
+**提示词侧同时预防：** `pipeline/brief.rs` 的 `DEPTH_BAR` 增加一条硬规则（id 用纯 ASCII 且避开关键字、节点与边标签一律双引号、换行用 `<br/>`、并点名 `/` 开头与 `()` 会解析失败），由 `brief_demands_parsable_mermaid` 单测锁住。**注意**：`DEPTH_BAR` 进两遍 system prompt 且参与 `prompt_salt`（`pipeline/prompt.rs`），所以改它会让**所有页指纹失效**——下次 `atlas update` 会全量重写页面（真实 API 上是额外成本）。阅读器侧的修复已能兜住历史文档，不想花钱可以一直不重生成。
 
 ---
 

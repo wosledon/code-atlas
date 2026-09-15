@@ -8,15 +8,15 @@
 use super::*;
 
 /// 所有页面共用的深度门槛，原样进入提示词。
-const DEPTH_BAR: &str = "\
-Hard quality bar (a page that misses any of these is a failed page, not a short one):
+const DEPTH_BAR: &str = r#"Hard quality bar (a page that misses any of these is a failed page, not a short one):
 - Substance: >= 1200 characters, >= 4 `##` sections, every section carries real content (no one-line sections).
 - Traceability: >= 6 backticked repository-relative paths or real symbol names; prefer `path:line` anchors you actually read with the tools.
 - At least one markdown table (files, symbols, commands, config keys, interfaces…).
+- Diagrams must PARSE. If you write a mermaid flowchart: node ids are plain ASCII identifiers (`[A-Za-z0-9_]`), never a mermaid keyword — `graph`, `end`, `subgraph`, `class`, `classDef`, `style`, `click`, `linkStyle`, `direction`, `default` — because those are lexed as syntax; wrap EVERY node and edge label in double quotes, e.g. `core["crates/atlas-core<br/>run_init_or_update"]`, `api -->|"POST /api/ask"| kb`, `cli -->|"serve()"| srv`; use `<br/>` (never a literal newline) for line breaks. Unquoted labels break the parser as soon as they start with `/` or contain `(`, `)` or `"`. Always quote; an unquoted label is a bug even when the reader can repair it.
 - Explain WHY, not only WHAT: intent, invariants, trade-offs, pitfalls, and what breaks if someone changes it.
-- No placeholders (\"需人工补全\", \"待补充\", \"TBD\", \"略\"): if something cannot be determined, say what you inspected and what stays unknown.
+- No placeholders ("需人工补全", "待补充", "TBD", "略"): if something cannot be determined, say what you inspected and what stays unknown.
 - End factual pages with `## Claims` (short verifiable bullets).
-- Generic advice that would fit any repository is worthless: every paragraph must mention something that is true only for THIS repository.";
+- Generic advice that would fit any repository is worthless: every paragraph must mention something that is true only for THIS repository."#;
 
 const PLACEHOLDERS: &[&str] = &[
     "需人工补全",
@@ -236,6 +236,15 @@ mod tests {
         assert!(arch.contains("Hard quality bar"));
         // 不同页面类型拿到不同大纲
         assert_ne!(arch, page_brief(&page("Runbook")));
+    }
+
+    /// 图必须能被 mermaid 解析：提示词里要写死 id 与标签的引号规则。
+    #[test]
+    fn brief_demands_parsable_mermaid() {
+        let brief = page_brief(&page("Architecture"));
+        assert!(brief.contains("Diagrams must PARSE"), "{brief}");
+        assert!(brief.contains("wrap EVERY node and edge label in double quotes"), "{brief}");
+        assert!(brief.contains("never a mermaid keyword"), "{brief}");
     }
 
     #[test]
