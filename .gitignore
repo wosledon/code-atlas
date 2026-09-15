@@ -1,0 +1,12 @@
+/target
+/data
+/atlas
+/web/node_modules
+/web/dist
+.atlas-data
+*.db
+*.db-wal
+*.db-shm
+atlas.lock
+atlas.lock.heartbeat
+.env

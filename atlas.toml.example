@@ -1,0 +1,42 @@
+# Code Atlas — 非密钥配置示例。密钥请用环境变量。
+# OPENAI_API_KEY / ANTHROPIC_API_KEY / ATLAS_PROVIDER / ATLAS_MODEL
+
+[llm]
+provider = "openai-compatible"
+model = "qwen2.5-coder:32b"
+base_url = "http://127.0.0.1:11434/v1"
+temperature = 0.2
+max_output_tokens = 16384
+concurrency = 5
+timeout_secs = 180
+retries = 3
+# 撰页时允许的只读工具轮数（list_files/read_file/grep）；0 关闭工具
+max_tool_rounds = 6
+
+[privacy]
+redact_paths = ["**/.env", "**/*.pem", "**/id_rsa*", "**/credentials*.json"]
+max_file_bytes = 262144
+
+[graph]
+llm_extract = true
+max_neighborhood_depth = 3
+authoritative_min_confidence = 0.7
+
+[kb]
+search = "fts5"
+embed_model = ""
+max_context_bytes = 24576
+
+[kb.chunk]
+mode = "hybrid"
+target_tokens = 512
+chunk_model = ""
+
+[output]
+strategy = "in-repo"
+atlas_root = "atlas"
+external_root = ""
+language = "zh-CN"
+
+[analyze]
+languages = ["rust", "typescript", "javascript", "python"]

@@ -1,0 +1,22 @@
+[package]
+name = "atlas-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+atlas-core.workspace = true
+atlas-store.workspace = true
+atlas-kb.workspace = true
+atlas-llm.workspace = true
+axum.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+walkdir.workspace = true
+toml.workspace = true
