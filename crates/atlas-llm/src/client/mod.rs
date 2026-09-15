@@ -19,15 +19,21 @@ pub struct LlmClient {
     http: reqwest::Client,
 }
 
+/// Environment variables that can carry the API key of a provider, in the order
+/// they are tried. Empty for providers that never need one.
+fn key_env_vars(provider: &str) -> &'static [&'static str] {
+    match provider {
+        "anthropic" => &["ANTHROPIC_API_KEY"],
+        "host-agent" => &[],
+        _ => &["OPENAI_API_KEY", "ATLAS_API_KEY"],
+    }
+}
+
 impl LlmClient {
     pub fn from_env(cfg: LlmConfig) -> Result<Self> {
-        let api_key = match cfg.provider.as_str() {
-            "anthropic" => std::env::var("ANTHROPIC_API_KEY").ok(),
-            "host-agent" => None,
-            _ => std::env::var("OPENAI_API_KEY")
-                .ok()
-                .or_else(|| std::env::var("ATLAS_API_KEY").ok()),
-        };
+        let api_key = key_env_vars(&cfg.provider)
+            .iter()
+            .find_map(|var| std::env::var(var).ok());
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(cfg.timeout_secs))
             .build()?;
@@ -64,6 +70,20 @@ impl LlmClient {
                 || base.contains("0.0.0.0"))
     }
 
+    /// Why [`configured`](Self::configured) is false, naming the exact
+    /// environment variable to set. Callers surface it so a keyless run never
+    /// quietly writes structural templates over the wiki.
+    pub fn unavailable_reason(&self) -> String {
+        if self.is_host_agent() {
+            return "provider=host-agent 由宿主 Agent 提供模型，atlas 进程无法直接调用".to_string();
+        }
+        let vars = key_env_vars(&self.cfg.provider).join(" 或 ");
+        format!(
+            "provider={} model={} base_url={}：未设置 {vars}，远程服务缺少 key 只能返回 401",
+            self.cfg.provider, self.cfg.model, self.cfg.base_url
+        )
+    }
+
     /// Whether this provider supports function calling.
     pub fn supports_tools(&self) -> bool {
         !self.is_host_agent() && self.cfg.provider != "anthropic"
@@ -85,9 +105,30 @@ impl LlmClient {
                 "provider=host-agent expects external agent submission; direct chat unavailable"
             ));
         }
+        let started = Instant::now();
+        if self.cfg.provider == "anthropic" {
+            return self.chat_anthropic_with_retry(system, user, started).await;
+        }
+        // `post_chat` already owns the retry budget for OpenAI-compatible
+        // endpoints, so both plain chats and tool rounds retry identically.
+        let messages = vec![ChatMessage::system(system), ChatMessage::user(user)];
+        let turn = self.post_chat(&messages, &[], started.elapsed()).await?;
+        Ok(LlmResponse {
+            text: turn.text,
+            usage: turn.usage,
+            model: turn.model,
+        })
+    }
+
+    async fn chat_anthropic_with_retry(
+        &self,
+        system: &str,
+        user: &str,
+        started: Instant,
+    ) -> Result<LlmResponse> {
         let mut last_err = None;
         for attempt in 0..=self.cfg.retries {
-            match self.chat_once(system, user).await {
+            match self.chat_anthropic(system, user, started).await {
                 Ok(r) => return Ok(r),
                 Err(e) => {
                     last_err = Some(e);
@@ -99,23 +140,6 @@ impl LlmClient {
         }
         Err(last_err.unwrap_or_else(|| anyhow!("llm call failed")))
     }
-
-    async fn chat_once(&self, system: &str, user: &str) -> Result<LlmResponse> {
-        let started = Instant::now();
-        if self.cfg.provider == "anthropic" {
-            return self.chat_anthropic(system, user, started).await;
-        }
-        let messages = vec![ChatMessage::system(system), ChatMessage::user(user)];
-        let turn = self
-            .post_chat(&messages, &[], started.elapsed())
-            .await?;
-        Ok(LlmResponse {
-            text: turn.text,
-            usage: turn.usage,
-            model: turn.model,
-        })
-    }
-
 }
 
 pub(super) fn truncate(s: &str, n: usize) -> String {

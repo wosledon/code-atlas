@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::paths::repo_slug;
 
+mod env;
 mod sections;
 
 pub use sections::{
@@ -57,43 +58,7 @@ impl AtlasConfig {
             break;
         }
         // env overrides
-        if let Ok(p) = std::env::var("ATLAS_PROVIDER") {
-            cfg.llm.provider = p;
-        }
-        if let Ok(m) = std::env::var("ATLAS_MODEL") {
-            cfg.llm.model = m;
-        }
-        if let Ok(u) = std::env::var("ATLAS_BASE_URL") {
-            cfg.llm.base_url = u;
-        }
-        if let Ok(t) = std::env::var("ATLAS_TEMPERATURE") {
-            if let Ok(v) = t.parse() {
-                cfg.llm.temperature = v;
-            }
-        }
-        if let Ok(t) = std::env::var("ATLAS_MAX_OUTPUT_TOKENS") {
-            if let Ok(v) = t.parse() {
-                cfg.llm.max_output_tokens = v;
-            }
-        }
-        if let Ok(t) = std::env::var("ATLAS_TIMEOUT_SECS") {
-            if let Ok(v) = t.parse() {
-                cfg.llm.timeout_secs = v;
-            }
-        }
-        if let Ok(t) = std::env::var("ATLAS_CONCURRENCY") {
-            if let Ok(v) = t.parse() {
-                cfg.llm.concurrency = v;
-            }
-        }
-        if let Ok(t) = std::env::var("ATLAS_TOOL_ROUNDS") {
-            if let Ok(v) = t.parse() {
-                cfg.llm.max_tool_rounds = v;
-            }
-        }
-        if let Ok(lang) = std::env::var("ATLAS_OUTPUT_LANGUAGE") {
-            cfg.output.language = lang;
-        }
+        env::apply_env(&mut cfg);
         Ok(cfg)
     }
 
@@ -112,6 +77,30 @@ impl AtlasConfig {
         }
     }
 
+    /// Files Atlas itself maintains inside the repository: the database (and
+    /// its WAL sidecars and the run lock) plus the scaffold it writes —
+    /// `AGENTS.md` pointer block and `atlas.toml.example`. Generation never
+    /// reads them, but they change while a run is in progress, so both the
+    /// repository scan and the page fingerprints must ignore them; otherwise
+    /// every run looks like "the repository changed" and nothing is ever reused.
+    pub fn ignored_scan_files(&self, repo_root: &Path) -> Vec<PathBuf> {
+        let db = self.db_path(repo_root);
+        let dir = db.parent().unwrap_or(repo_root).to_path_buf();
+        let mut out = vec![
+            db.clone(),
+            dir.join("atlas.lock"),
+            dir.join("atlas.lock.heartbeat"),
+            repo_root.join("AGENTS.md"),
+            repo_root.join("atlas.toml.example"),
+        ];
+        for suffix in ["-wal", "-shm"] {
+            let mut name = db.file_name().unwrap_or_default().to_os_string();
+            name.push(suffix);
+            out.push(dir.join(name));
+        }
+        out
+    }
+
     pub fn atlas_root(&self, repo_root: &Path) -> PathBuf {
         match self.output.strategy.as_str() {
             "external-dir" => {
@@ -124,6 +113,22 @@ impl AtlasConfig {
             }
             "db-only" => repo_root.join(".atlas-data").join(repo_slug(repo_root)).join("wiki-export"),
             _ => repo_root.join(&self.output.atlas_root),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn atlas_maintained_files_are_ignored_by_the_scan() {
+        let cfg = AtlasConfig::default();
+        let root = Path::new("/repo");
+        let ignored = cfg.ignored_scan_files(root);
+        for expected in ["data/atlas.db", "data/atlas.db-wal", "data/atlas.lock", "AGENTS.md", "atlas.toml.example"] {
+            let needle = Path::new("/repo").join(expected);
+            assert!(ignored.contains(&needle), "{expected} missing from {ignored:?}");
         }
     }
 }

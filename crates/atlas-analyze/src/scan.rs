@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use walkdir::WalkDir;
 
@@ -21,6 +21,14 @@ pub fn detect_language(path: &Path) -> Option<&'static str> {
 }
 
 pub fn scan_repo(root: &Path) -> anyhow::Result<RepoScan> {
+    scan_repo_with_skips(root, &[])
+}
+
+/// Scan the repository, additionally ignoring `skips` — absolute paths of the
+/// files Atlas itself writes (store database, WAL, run lock). Those change on
+/// every run, so keeping them in the scan would change every page fingerprint
+/// and silently disable incremental reuse.
+pub fn scan_repo_with_skips(root: &Path, skips: &[PathBuf]) -> anyhow::Result<RepoScan> {
     let ignore = IgnoreRules::load_root(root);
     let mut files = Vec::new();
     let mut readme_excerpt = None;
@@ -32,6 +40,9 @@ pub fn scan_repo(root: &Path) -> anyhow::Result<RepoScan> {
         .filter_entry(|e| {
             if e.depth() == 0 {
                 return true;
+            }
+            if skips.iter().any(|s| e.path().starts_with(s)) {
+                return false;
             }
             let name = e.file_name().to_string_lossy();
             if SKIP_DIRS.contains(&name.as_ref()) {
@@ -104,4 +115,42 @@ pub fn scan_repo(root: &Path) -> anyhow::Result<RepoScan> {
         manifests,
         languages: langs.into_iter().collect(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn state_files_are_skipped() {
+        let root = std::env::temp_dir().join(format!(
+            "atlas-scan-skip-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("data")).unwrap();
+        std::fs::write(root.join("src/lib.rs"), "pub fn a() {}\n").unwrap();
+        let db = root.join("data/atlas.db");
+        std::fs::write(&db, b"sqlite-ish bytes").unwrap();
+        std::fs::write(root.join("data/atlas.lock"), b"123").unwrap();
+
+        let plain = scan_repo(&root).expect("scan");
+        assert!(plain.files.iter().any(|f| f.rel == "data/atlas.db"));
+
+        let skips = vec![
+            db.clone(),
+            root.join("data/atlas.lock"),
+            root.join("data/atlas.db-wal"),
+        ];
+        let filtered = scan_repo_with_skips(&root, &skips).expect("scan");
+        assert!(filtered.files.iter().any(|f| f.rel == "src/lib.rs"));
+        assert!(!filtered.files.iter().any(|f| f.rel == "data/atlas.db"));
+        assert!(!filtered.files.iter().any(|f| f.rel == "data/atlas.lock"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

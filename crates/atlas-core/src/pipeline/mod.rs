@@ -2,11 +2,13 @@
 //!
 //! `atlas init|update` runs through [`run_init_or_update`], which chains the
 //! phase modules: `plan` decides the page set, `prepare` fingerprints it for
-//! incremental reuse, `generate` renders bodies (LLM or template), `write`
+//! incremental reuse, `generate` fans the pages out to `pagegen` (one model call
+//! per page, LLM or template), `write`
 //! persists pages/claims/chunks, `graph` seeds the entity graph and
 //! `maintenance` finishes the run. Supporting modules: `evidence` (prompt
-//! assembly), `plan_modules` (repository layout detection) and `template`
-//! (offline fallback).
+//! assembly), `brief` (per-page outline + depth gate), `prompt` (the two
+//! generation prompts), `plan_modules`
+//! (repository layout detection) and `template` (offline fallback).
 //! Everything the CLI and the server use is re-exported here so
 //! `atlas_core::pipeline::*` stays a stable API.
 use crate::git;
@@ -15,7 +17,7 @@ use crate::markdown::{self, FrontMatter};
 use crate::tools::RepoTools;
 use crate::{ensure_agents_pointer, sha256_hex, AtlasConfig};
 use anyhow::{bail, Result};
-use atlas_analyze::{extract_symbols, read_file_excerpt, scan_repo, RepoScan, SourceFile};
+use atlas_analyze::{extract_symbols, read_file_excerpt, scan_repo, scan_repo_with_skips, RepoScan, SourceFile};
 use atlas_claims::{claims_from_markdown, write_page_claims};
 use atlas_kb::{link_page_to_module, store_chunks, upsert_module_entities, ChunkMode};
 use atlas_llm::{LlmClient, LlmConfig};
@@ -24,13 +26,17 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
+mod brief;
 mod evidence;
 mod generate;
 mod graph;
 mod maintenance;
+mod outline;
+mod pagegen;
 mod plan;
 mod plan_modules;
 mod prepare;
+mod prompt;
 mod run;
 mod template;
 mod types;

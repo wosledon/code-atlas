@@ -62,6 +62,7 @@ impl LlmClient {
                         .iter()
                         .map(|c| ToolCallPayload {
                             id: c.id.clone(),
+                            kind: "function".into(),
                             function: ToolCallFunction {
                                 name: c.name.clone(),
                                 arguments: c.arguments.clone(),

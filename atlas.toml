@@ -7,6 +7,7 @@ max_output_tokens = 16384
 concurrency = 5
 timeout_secs = 180
 retries = 3
+depth_pass = true
 
 [privacy]
 redact_paths = [

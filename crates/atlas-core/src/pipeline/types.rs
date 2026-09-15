@@ -8,10 +8,36 @@ pub(crate) struct PageJob {
     pub(crate) evidence: String,
     pub(crate) fingerprint: String,
     pub(crate) reuse_body: Option<String>,
+    /// A real (LLM-written) body already exists on disk for this page, so a
+    /// failed regeneration must keep it instead of replacing it with a
+    /// structural template.
+    pub(crate) keep_body_on_failure: bool,
 }
 
-/// Output of the generation stage: `(plan index, page, body, usage, fingerprint, reused)`.
-pub(crate) type GeneratedPage = (PlannedPage, String, Option<(i64, i64, i64)>, String, bool);
+/// How a page was produced. It decides whether the write phase replaces the
+/// file on disk at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PageOutcome {
+    /// Fresh body written by the model.
+    Generated,
+    /// Previous body reused because the evidence (and the prompts) did not change.
+    Reused,
+    /// Structural template, used when no LLM is configured.
+    Template,
+    /// Generation failed and the previous body was left untouched on disk.
+    KeptPrevious,
+}
+
+/// One generated page plus the bookkeeping the write phase needs. Pages travel
+/// from the generation stage to the writer one at a time, so a run that is
+/// interrupted keeps every page it already produced.
+pub(crate) struct GeneratedPageWithMeta {
+    pub(crate) page: PlannedPage,
+    pub(crate) body: String,
+    pub(crate) usage: Option<(i64, i64, i64)>,
+    pub(crate) fingerprint: String,
+    pub(crate) outcome: PageOutcome,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(non_snake_case)]

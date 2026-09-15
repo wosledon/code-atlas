@@ -125,6 +125,7 @@ Code Atlas 让任何代码仓库在一次可重复运行后，拥有一份 **人
 | `ATLAS_TEMPERATURE` | 默认 `0.2`（事实型文档，低温） |
 | `ATLAS_REASONING_EFFORT` | 可选：`none/low/medium/high`（网关支持时透传） |
 | `ATLAS_CONCURRENCY` | 并行页 worker 数，默认 `5` |
+| `ATLAS_DEPTH_PASS` | 生成后是否跑深度体检 + 二次扩写，默认 `true`（`0`/`false`/`off`/`no` 关闭） |
 | `ATLAS_TIMEOUT_SECS` | 单次请求超时，默认 `180` |
 
 **`atlas.toml` 示例（无密钥）**
@@ -140,6 +141,7 @@ concurrency = 5
 timeout_secs = 180
 retries = 3
 max_tool_rounds = 6              # 撰页时允许的只读工具轮数（read_file/list_files/grep），0 关闭
+depth_pass = true                # 生成后按深度门槛体检；不达标再跑一次扩写（第二遍）
 
 [llm.modes]                      # 规划（预留，尚未实现）
 # 规划可略低于撰页；host-agent 表示把撰写外包给当前编码 Agent
@@ -371,6 +373,17 @@ sequenceDiagram
 [结构化事实 → 写入 .claims/，正文只留可读摘要]
 ```
 
+### C.1 页类型大纲与深度门槛（`pipeline/brief.rs`）
+
+上面是**最小骨架**；实际撰页由 `page_brief()` 按页类型注入硬性大纲（Quickstart / Onboarding / Business / Architecture / Data Model / API Reference / Workflow / Runbook / Module + 兜底各一套中文 `##` 结构，含表格与 mermaid 要求），并同时下发 `DEPTH_BAR` 深度门槛：
+
+- 正文 ≥ 1000 字符（Quickstart/Onboarding）/ ≥ 1200 字符（其余），`##` 小节 ≥ 4（Module ≥ 5）；
+- 至少一个「真表格」（数据行 ≥ 3）、架构 / 数据 / 流程 / 模块页必须有 mermaid 图；
+- ≥ 6 处反引号包裹的**真实路径或符号**（代码级证据）；结尾必须有 `## Claims`；
+- 必须写清「为什么这样设计 / 为什么这样做」，禁止只罗列 what，禁止「待补充 / 此处省略 / TBD」等占位。
+
+生成后 `depth_gaps()` 逐条体检；缺口非空且 `llm.depth_pass` 为真时再跑一次「扩写 pass」，两次取缺口更少的一稿。确定性证据（符号行号 / 声明依赖 / 真实命令）见 §L.2。
+
 ## D. 生成管线（运行时）
 
 ```mermaid
@@ -411,7 +424,7 @@ flowchart LR
 - 本地由 **Rust `atlas-server`** 提供服务（默认 `127.0.0.1:4321`），前端为 `web/` 构建产物。
 - **Shell：** MD3 NavigationRail（Wiki / 图谱 / 知识库 / 对话 / Runs / Settings）+ TopAppBar。
 - **`/`（Home）：** **入口是项目卡片列表**（`GET /api/projects`：仓库名、语言、provider/model、页数/chunk 数、最近更新时间与状态、`entryPath`、highlights）；**点卡片才进入 Wiki 文档**。空库时给出 `atlas init` 引导，不显示空卡片墙。
-- **Reader：** `/reader?p=<相对路径>` 深链（默认 `entryPath`）；Markdown 阅读 + Claims chip + 「在图谱中定位」；左栏为文档树，当前页高亮。
+- **Reader：** `/reader?p=<相对路径>` 深链（默认 `entryPath`）；Markdown 阅读 + Claims chip + 「在图谱中定位」；左栏为文档树（**全高、独立滚动**），当前页高亮。`/reader` 走**应用外壳**（`App.tsx` 的 `FULL_HEIGHT_ROUTES`）：`main` 在 md 断点下 `height:100vh; overflow:hidden`，容器与路由根节点逐层 `flexGrow:1; minHeight:0`，目录卡与正文卡各自 `overflow:auto`——**页面本身不滚动**，读正文不会带动目录或整页；窄屏（xs）退回普通文档流，目录卡限高 320px。
 - **Graph 视图：** 节点=**实体**（页、符号、API、配置项、外部系统）；边=关系（`describes` / `calls` / `depends_on` / `owned_by` / `evidenced_by`）；支持类型筛选、1–2 跳扩展、按 section 聚类。
 - **KB 视图：** 实体表 · 实体详情（定义、Claims、关联页、**相关 chunk 摘要列表**、邻域子图）· 检索结果默认先亮 **summary**，展开再读 `body`（含 `page_path` 与 `start_line-end_line`，可跳 Reader）。
 - **对话（`/chat`）：** 除「关联文件」外**必须展示本轮召回内容**（`contexts[]`：`page_path` / 行号 / score / body 片段），召回是事实、回答是推导，二者分栏呈现。
@@ -621,6 +634,7 @@ chunk_entities(chunk_id, entity_key)
 - chunk 覆盖检查：页非空则至少 1 块；连续 span 不得大面积空洞（结构性缺口告警）。
 - summary/body 发送前过 `redact_paths`；分块输出再扫一遍密钥模式。
 - `retired` 实体默认不进 search；库校验和漂移 → 以文件为准 `reindex`，Runs 记 `repair`。
+- **深度门（生成侧）：** 每页按 §C.1 门槛体检（`brief::depth_gaps`）；有缺口时跑一次扩写 pass 并取更完整的一稿，仍未达标只记进度日志与 run note，不阻塞交付。
 
 ## K. 工程化约定（锁）
 
@@ -798,7 +812,7 @@ atlas init-config          # 写 atlas.toml.example
 **规则（评审硬约束）**
 
 1. **单文件 ≤ 400 行**：超过即按职责拆到同目录的兄弟模块；`lib.rs` / `mod.rs` 只做「模块声明 + `pub use` 重导出 + 少量接线」，目标 ≤ 150 行。
-2. **一个模块一个职责**：例如 `atlas-core/src/pipeline/` 按流水线阶段（`plan` / `prepare` / `generate` / `write` / `graph` / `maintenance`）拆分，支撑逻辑单独成模块（`evidence` / `template` / `plan_modules`）。
+2. **一个模块一个职责**：例如 `atlas-core/src/pipeline/` 按流水线阶段（`plan` / `prepare` / `generate` / `write` / `graph` / `maintenance`）拆分，支撑逻辑单独成模块（`brief` / `outline` / `evidence` / `prompt` / `template` / `plan_modules`）。
 3. **公开 API 不变**：拆分只搬运代码，不改签名。子模块保留原可见性，`lib.rs` / `mod.rs` 用 `pub use` 把原路径重新导出（如 `atlas_core::AtlasConfig`、`atlas_core::pipeline::preview_plan`）。
 4. **跨模块可见性**：需要被兄弟模块使用的项标 `pub(crate)` / `pub(super)`；私有字段拆出后其所在 `struct` 与字段同样需要放宽到 `pub(crate)`。
 5. **搬运而非重写**：拆文件时逐行移动代码块，避免顺手改逻辑；如需逻辑修改，另开改动。
@@ -808,8 +822,8 @@ atlas init-config          # 写 atlas.toml.example
 | 位置 | 拆分方式 |
 |---|---|
 | `crates/atlas-store/src/` | `models` / `runs` / `pages` / `chunks` / `entities` / `search` / `query` / `schema` / `tests` |
-| `crates/atlas-core/src/` | `config/{mod,sections}` / `paths` / `scaffold` / `pipeline/*`（12 个阶段模块） |
-| `crates/atlas-analyze/src/` | `types` / `ignore` / `scan` / `symbols` |
+| `crates/atlas-core/src/` | `config/{mod,sections}` / `paths` / `scaffold` / `pipeline/*`（16 个文件：`plan` / `prepare` / `generate` / `write` / `graph` / `maintenance` 等阶段 + `brief` / `outline` / `evidence` / `prompt` / `template` / `plan_modules` 支撑） |
+| `crates/atlas-analyze/src/` | `types` / `ignore` / `scan` / `symbols` / `outline` |
 | `crates/atlas-llm/src/` | `types` / `wire` / `client/{mod,tools,providers}` |
 | `crates/atlas-server/src/` | `auth` / `common` / `assets` / `runs` / `projects` / `graph` / `search` / `chat` / `tree` / `config` |
 | `web/src/` | `components/chat/*`（7 文件）、`components/graph/*`（7 文件）；`pages/Search.tsx`、`pages/Graph.tsx` 只留页面壳 |
@@ -832,8 +846,12 @@ atlas init-config          # 写 atlas.toml.example
 - **并发：** 撰页 worker 默认 `5`（`llm.concurrency` / `ATLAS_CONCURRENCY`）。
 - **只读工具：** 模型可按需调用 `list_files(pattern)` / `read_file(path, start?, end?)` / `grep(pattern, glob?)`，轮数上限 `llm.max_tool_rounds`（默认 6）。工具由 Rust 侧强制边界：仅限仓库内、跳过 `redact_paths`、单文件字节上限；越界返回错误而不是内容。
 - **证据瘦身：** 每页只发「仓库地图 + 本页 focus + 模块内文件清单」，不再把整仓正文塞进 prompt；需要细节时由模型主动读文件。
-- **增量复用：** `pages.evidence_hash` 存页指纹（focus + evidence + 模块内文件 `rel:size`）。指纹未变且文件仍在 → 直接复用正文、跳过 LLM；`body_hash` 未变且已有 chunk → 跳过重新分块。
+- **增量复用：** `pages.evidence_hash` 存页指纹（**提示词盐 `prompt_salt` + focus + evidence + 模块内文件 `rel:size`**）。指纹未变且文件仍在 → 直接复用正文、跳过 LLM；`body_hash` 未变且 chunk 签名（`source` 末尾 `mode|target_tokens|llm=`）全部匹配 → 跳过重新分块。改提示词 / 换模型 / 调 `llm.depth_pass` / 调 `kb.chunk.*` 都会让对应产物重建，不再出现「改了提示词却不生效」或「配置改了还用旧切分」。
+- **指纹必须稳定：** 扫描与指纹**忽略 Atlas 自身维护的文件**（`data/atlas.db`(+`-wal`/`-shm`)、`data/atlas.lock(.heartbeat)`、根 `AGENTS.md`、`atlas.toml.example`，见 `Config::ignored_scan_files` + `scan_repo_with_skips`），页文件写盘也做了归一化（`markdown::write_page` 去尾空白后补一个 `\n`），`AGENTS.md` 的指针块按标记行整体替换（幂等）。否则「每次 update 都长一个换行 / 数据库每次变大 / init 末尾才写出 `AGENTS.md`」会污染全仓指纹，导致每轮全量重生成。生成侧从不读这两个文件，排除它们在语义上是安全的。
 - **陈旧清理：** 每次 run 结束执行 `prune_missing_pages`，删除文档树里已不存在的页及其 chunk（含 FTS 行），避免旧布局的幽灵页面继续被检索命中。
+- **证据加厚（确定性）：** 每页 evidence 除仓库地图 / README / 现有设计文档 / 模块文件清单外，再加三段**确定性**证据：`## Manifests & declared dependencies`（crate / npm / go / py 的声明依赖，排序去重后取前 12 个 manifest）、`## Commands that exist in this repository`（从 manifest 与构建文件推导的真实命令）、`## Source outline (declarations with line numbers)`（按文件大小排序的符号骨架，形如 `` `12` fn new ``）。`outline.rs` 有单测保证两次调用字节一致——evidence 抖动会污染页指纹并触发无谓重生成。
+- **深度门 + 扩写 pass：** 生成后 `brief::depth_gaps` 体检；缺口非空且 `llm.depth_pass`（默认 `true`）时，把「缺口清单 + 草稿（截 12k 字符）+ 同一份证据」交给模型做一次编辑式扩写，取更完整的一稿（要求 ≥80 字符且缺口减少，缺口相同时取更长者）。usage 累加，进度条显示「扩写 n/N」、完成行加「· 深度重写」，汇总输出「深度重写 N」并写入 run note。模板模式（无 LLM）不触发。
+- **指纹影响：** evidence 变厚会改变 `evidence_hash`，所以升级后的**第一次** `update` 会全量重生成，之后恢复按指纹复用。
 
 ### L.3 分块：由模型决定边界，chunk = 简要 + 分块内容
 
@@ -861,8 +879,14 @@ atlas init-config          # 写 atlas.toml.example
 ### L.8 已验证 / 已知差距
 
 - 已验证：`cargo test --workspace --all-targets`、`cargo clippy --workspace --all-targets`、`atlas plan|init|check|update` 端到端、`web/` 构建、`/api/projects|/api/kb/search|/api/kb/chat` 与路径越权 / CORS 用例。
-- 已验证（模块化）：`pipeline.rs`(1826→12 模块)、`atlas-store`(1114→9 模块)、`atlas-server`(890→11 模块)、`atlas-core` 根、`atlas-analyze`、`atlas-llm`、前端 `Search/Graph` 均已拆分；最大单文件从 1826 行降到 389 行（`atlas-core/src/tools.rs`）。
-- 差距：向量检索未实现（仅 FTS5+LIKE）；`hybrid` 目前等价 `llm-semantic`（未做「先结构再微调」）；工具是只读（无 write/patch/MCP `atlas_*` 工具面）；`ATLAS_PROVIDER=host-agent` 仍走模板回退；`clippy` 仍留少量历史风格提示（`collapsible_if` / `too_many_arguments`），非本次拆分引入。
+- 已验证（模块化）：`pipeline.rs`(1826 行 → `pipeline/` 16 个文件)、`atlas-store`(1114 → 10 文件)、`atlas-server`(890 → 11 文件)、`atlas-analyze`(→ 6 文件)、`atlas-core` 根、`atlas-llm`、前端 `Search/Graph` 均已拆分；最大单文件从 1826 行降到 390 行（`atlas-core/src/tools.rs`；`pipeline/generate.rs` 经提示词外提到 `prompt.rs` 后为 342 行），无文件超过 400 行。
+- 已验证（深度生成，本轮）：`brief.rs`（页类型大纲 + `depth_gaps` 4 单测）、`outline.rs`（符号行号 / 声明依赖 / 真实命令，含「两次调用字节一致」的确定性单测）、`pipeline/prompt.rs`（提示词回归测试：brief 整段注入 + `path:line` 引用要求 + 证据到位 + 扩写缺口清单 + 草稿 12k 截断）、`pipeline/tests.rs`（端到端证据集成测试：段序 + `anyhow` 依赖 + `1 struct Demo` / `4 fn start` / `9 fn helper` 行号锚点 + 重复调用字节一致）、`cargo test --workspace`（21 通过）、`atlas plan|check|update` 端到端、`web/` 构建。
+- 已验证（阅读器布局，本轮）：浏览器实测 md 宽度下 `document.documentElement.scrollHeight == clientHeight`（整页不滚动），目录卡与正文卡各自全高 `overflow:auto` 且滚动互不影响（正文滚到 800px 时目录 `scrollTop` 仍为 0）；窄屏（600px）退回文档流、目录卡限高 320px。
+- 已验证（离线 stub 端到端，本轮）：用 OpenAI 兼容桩服务（base_url 指向 `127.0.0.1`，免 key）在仓库副本上跑 `atlas init` exit 0。生成侧 24 页全部走「工具回合 → 浅稿被 `depth_gaps` 判 5 项缺口 → 扩写 pass → 采用深稿」，run note 为 `depth gate rewrote 24/24 pages in a second pass`，tokens `99260 / 22894`，桩日志计数 `first_pass 24 / tool_call 48 / tool_result 48 / expand 24`（工具返回真实文件内容）。分块侧 25 次分块请求全部按 JSON 协议应答（每页 6 段），落库 **96 个 chunk 且 `source` 全为 `llm-semantic`**，`chunks_fts` 96 行；`merge_small_chunks` 把 <400 字符的尾段折进前块（6 段 → 4 块/页）；`atlas search` 命中结果同时带 `summary` 与 `body` 及 `start_line/end_line`。
+- 已验证（复用收敛，本轮）：离线严格 stub 上连续跑 `atlas update`，输入不变时第 N 轮 **0 次 LLM 调用**（`[atlas] 17 页证据未变，复用上一版正文（跳过 LLM）` + 桩计数 `chat/chunks` 不再增长），页 md 文件逐字节不变（只有 `atlas/.claims/*.json` 与 `.last-update.json` 随 run 更新，二者都在 `SKIP_DIRS` 里）；把 `kb.chunk.target_tokens` 512→256 后 `atlas reindex` 落 `structural|hybrid|256|llm=false`、再 `update` 重建为 `llm-semantic|hybrid|256|llm=true`（签名门生效）。单测：`scaffold::agents_pointer_is_idempotent`、`scan::state_files_are_skipped`、`config::atlas_maintained_files_are_ignored_by_the_scan`、`pipeline::reused_body_round_trips_through_write_and_read`、提示词盐与 chunk 签名回归。**已验证（clean-start 收敛，本轮）**：全新仓库先 `init`（此时仓里没有 `AGENTS.md`，由 init 收尾写出）再 `update`，第 2 轮仍为 0 次 LLM 调用（修复前该场景因 `AGENTS.md` 新增使 16 个非模块页指纹全变、多花 32 次调用）。
+- 已验证（模块化，本轮）：`atlas-kb` 由 255 行单文件拆为 `spec`/`structural`/`semantic`/`persist` + 16 行门面 `lib.rs`，`atlas-core` 的配置 env 覆盖抽到 `config/env.rs`，公开 API 与行为不变（全量测试全绿、离线 stub 端到端复验通过）。
+- 已验证（OpenAI 兼容协议，本轮）：回传 assistant `tool_calls` 时必须带 `"type":"function"`，否则用过工具的页第二轮起被 StepFun 判 400（`llm http 400 Bad Request`）；现在 `ToolCallPayload.kind` 默认 `function`（单测 + 严格 stub 的 payload 校验，`reject=0`）。错误信息改为 body 优先（`llm http 400: <body 前 400 字符> @ <url>`），瞬时错误（408/409/425/429/5xx/传输失败）按 `400ms×(n+1)²` 退避重试，工具回合失败自动退回无工具重试；回退模板的页把指纹标成 `{fp}+template`，下一轮不会被误当作「已生成」复用。
+- 差距：向量检索未实现（仅 FTS5+LIKE）；`hybrid` 目前等价 `llm-semantic`（未做「先结构再微调」）；工具是只读（无 write/patch/MCP `atlas_*` 工具面）；`ATLAS_PROVIDER=host-agent` 仍走模板回退；`clippy` 仍留少量历史风格提示（`collapsible_if` / `too_many_arguments`），非本次拆分引入；`depth_gaps` 的门槛目前只在单测、模板模式与离线 stub（结构指标达标即通过）上验证过，本机无真实 API key，真实中文 LLM 输出上的误伤率待观察。
 
 ---
 

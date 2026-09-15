@@ -1,4 +1,5 @@
 use super::run::{RunContext, RunCounts};
+use super::write::chunk_source_label;
 use super::*;
 
 pub(crate) fn read_last_update(atlas_root: &Path) -> Option<LastUpdate> {
@@ -109,7 +110,16 @@ pub fn reindex(repo_root: &Path, cfg: &AtlasConfig) -> Result<usize> {
                 &text,
                 cfg.kb.chunk.target_tokens,
             ));
-            atlas_kb::store_chunks(&store, &rel, &run_id, &specs, "structural")?;
+            // 重建索引时只做结构分块，但源标签与 `update` 保持一致，避免下一次
+            // `atlas update` 因为标签不匹配而重做全部 chunks。
+            let label = chunk_source_label(&cfg.kb.chunk.mode, cfg.kb.chunk.target_tokens, false);
+            atlas_kb::store_chunks(
+                &store,
+                &rel,
+                &run_id,
+                &specs,
+                &format!("structural|{label}"),
+            )?;
             n += 1;
         }
     }

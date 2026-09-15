@@ -15,6 +15,22 @@ impl Store {
         )?)
     }
 
+    /// How many of a page's chunks carry a chunker signature `suffix` (the part
+    /// after the last `|`). Chunk reuse is only valid when *all* of them match the
+    /// current chunker (see `pipeline::write`), so switching `kb.chunk.mode` or
+    /// `target_tokens` rebuilds them.
+    pub fn count_chunks_for_page_with_signature(
+        &self,
+        page_path: &str,
+        suffix: &str,
+    ) -> Result<i64> {
+        Ok(self.conn().query_row(
+            "SELECT COUNT(*) FROM chunks WHERE page_path=?1 AND source LIKE ?2",
+            params![page_path, format!("%|{suffix}")],
+            |r| r.get(0),
+        )?)
+    }
+
     pub fn replace_chunks_for_page(
         &self,
         page_path: &str,

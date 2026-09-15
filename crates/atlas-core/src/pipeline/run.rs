@@ -12,19 +12,7 @@ use super::graph::seed_graph;
 use super::maintenance::{finalize, read_last_update};
 use super::plan::plan_pages;
 use super::prepare::prepare_jobs;
-use super::write::write_pages;
 use std::sync::Arc;
-
-/// A generated page plus the bookkeeping the write phase needs: its index in the
-/// plan, the body, token usage, evidence fingerprint and whether it was reused.
-pub(super) type GeneratedPageWithMeta = (
-    usize,
-    PlannedPage,
-    String,
-    Option<(i64, i64, i64)>,
-    String,
-    bool,
-);
 
 /// State that must outlive every phase of a run: the exclusive lock (released
 /// when the run row is finished), the store handle and the repository facts
@@ -60,6 +48,10 @@ pub(super) struct RunCounts {
     pub(super) completion_tokens: i64,
     pub(super) pages_reused: usize,
     pub(super) reused_chunks: usize,
+    /// Pages that fell back to the structural template (no usable model output).
+    pub(super) template_pages: usize,
+    /// Pages whose previous body was kept because regenerating them failed.
+    pub(super) pages_kept: usize,
 }
 
 pub async fn run_init_or_update(
@@ -84,14 +76,20 @@ async fn execute(
     }
 
     let mut counts = RunCounts::default();
-    let scan = Arc::new(scan_repo(&ctx.repo_root)?);
+    let scan = Arc::new(scan_repo_with_skips(
+        &ctx.repo_root,
+        &ctx.cfg.ignored_scan_files(&ctx.repo_root),
+    )?);
     report_scan(&scan);
     let llm = Arc::new(build_llm(ctx)?);
     let use_llm = llm.configured() && !llm.is_host_agent();
     if !use_llm {
-        counts
-            .notes
-            .push("LLM unavailable or host-agent: using structural templates".into());
+        // Never let a keyless run silently rewrite the wiki with templates: say
+        // why the model is unavailable and what to set.
+        let reason = llm.unavailable_reason();
+        counts.notes.push(format!("template mode: {reason}"));
+        println!("[atlas] ⚠ 未启用 LLM，本次只生成结构模板：{reason}");
+        println!("[atlas]   已存在的模型正文会原样保留，设置 key 后重跑 `atlas update` 即可重写。");
     }
     let plan = plan_pages(&scan, &session.mode, instruction);
     let run = RunContext {
@@ -105,8 +103,9 @@ async fn execute(
 
     seed_graph(&run)?;
     let jobs = prepare_jobs(&run)?;
-    let generated = generate_pages(&run, jobs, &mut counts).await?;
-    write_pages(&run, generated, &mut counts).await?;
+    // Generation and writing are interleaved inside `generate_pages`: every page
+    // is written the moment it is ready.
+    generate_pages(&run, jobs, &mut counts).await?;
     finalize(&run, counts)
 }
 

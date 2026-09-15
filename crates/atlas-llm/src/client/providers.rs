@@ -8,14 +8,70 @@ use crate::wire::{
 
 use super::{truncate, LlmClient};
 
+/// Why one HTTP attempt failed, and whether it is worth trying again.
+enum Attempt {
+    /// Network hiccup, throttling or provider-side error: retry.
+    Transient(anyhow::Error),
+    /// A repeat of the same request will fail the same way (bad payload, key,
+    /// model): report immediately so the page can fall back fast.
+    Fatal(anyhow::Error),
+}
+
+impl Attempt {
+    fn from_status(status: reqwest::StatusCode, body: &str, url: &str) -> Self {
+        let code = status.as_u16();
+        let err = anyhow!("llm http {status}: {} @ {url}", truncate(body, 400));
+        let transient = matches!(code, 408 | 409 | 425 | 429) || code >= 500;
+        if transient {
+            Attempt::Transient(err)
+        } else {
+            Attempt::Fatal(err)
+        }
+    }
+}
+
+impl From<serde_json::Error> for Attempt {
+    fn from(e: serde_json::Error) -> Self {
+        Attempt::Fatal(anyhow!("llm response is not valid JSON: {e}"))
+    }
+}
+
 impl LlmClient {
-    /// One raw round-trip against an OpenAI-compatible `/chat/completions`.
+    /// One raw round-trip against an OpenAI-compatible `/chat/completions`,
+    /// retrying transient failures. Tool rounds go through here as well, so a
+    /// throttled follow-up call does not lose a whole page.
     pub(super) async fn post_chat(
         &self,
         messages: &[ChatMessage],
         tools: &[ToolSpec],
         elapsed: Duration,
     ) -> Result<LlmTurn> {
+        let mut last: Option<anyhow::Error> = None;
+        for attempt in 0..=self.cfg.retries {
+            match self.post_chat_once(messages, tools, elapsed).await {
+                Ok(turn) => return Ok(turn),
+                Err(Attempt::Fatal(e)) => return Err(e),
+                Err(Attempt::Transient(e)) => {
+                    tracing::warn!("llm 请求失败（第 {} 次）：{e:#}", attempt + 1);
+                    last = Some(e);
+                    if attempt < self.cfg.retries {
+                        tokio::time::sleep(Duration::from_millis(
+                            400 * (attempt as u64 + 1).pow(2),
+                        ))
+                        .await;
+                    }
+                }
+            }
+        }
+        Err(last.unwrap_or_else(|| anyhow!("llm call failed")))
+    }
+
+    async fn post_chat_once(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[ToolSpec],
+        elapsed: Duration,
+    ) -> std::result::Result<LlmTurn, Attempt> {
         let payloads: Vec<ToolPayload<'_>> = tools
             .iter()
             .map(|t| ToolPayload {
@@ -45,11 +101,15 @@ impl LlmClient {
             .bearer_auth(key)
             .json(&body)
             .send()
-            .await?;
+            .await
+            .map_err(|e| Attempt::Transient(anyhow!("llm transport error @ {url}: {e}")))?;
         let status = resp.status();
-        let text = resp.text().await?;
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| Attempt::Transient(anyhow!("llm response read error: {e}")))?;
         if !status.is_success() {
-            return Err(anyhow!("llm http {status} @ {url}: {}", truncate(&text, 400)));
+            return Err(Attempt::from_status(status, &text, &url));
         }
         let parsed: ChatResponse = serde_json::from_str(&text)?;
         let message = parsed

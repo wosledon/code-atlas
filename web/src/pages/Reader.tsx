@@ -90,16 +90,31 @@ export default function ReaderPage() {
   const count = useMemo(() => countNodes(tree), [tree]);
 
   return (
-    <Stack spacing={2.5}>
-      <Box className="atlas-fade">
+    <Stack
+      spacing={2.5}
+      sx={{ height: { md: "100%" }, minHeight: 0, flexGrow: { md: 1 }, alignItems: "stretch" }}
+    >
+      <Box className="atlas-fade" sx={{ flexShrink: 0 }}>
         <Typography variant="h4">项目文档</Typography>
         <Typography color="text.secondary" sx={{ mt: 0.5 }}>
           树状目录 · 共 {count} 页 · 点击文件阅读；折叠/展开文件夹
         </Typography>
       </Box>
       {err && <Alert severity="error">{err}</Alert>}
-      <Stack direction={{ xs: "column", md: "row" }} spacing={2.5} alignItems="flex-start">
-        <Card sx={{ width: { md: 320 }, maxHeight: 740, overflow: "auto", flexShrink: 0 }}>
+      <Stack
+        direction={{ xs: "column", md: "row" }}
+        spacing={2.5}
+        sx={{ flexGrow: 1, minHeight: 0, alignItems: "stretch" }}
+      >
+        <Card
+          sx={{
+            width: { md: 320 },
+            flexShrink: 0,
+            height: { md: "100%" },
+            maxHeight: { xs: 320, md: "none" },
+            overflow: "auto",
+          }}
+        >
           <CardContent sx={{ py: 1.5 }}>
             {tree ? (
               <TreeView
@@ -114,7 +129,16 @@ export default function ReaderPage() {
             )}
           </CardContent>
         </Card>
-        <Card sx={{ flexGrow: 1, width: "100%", maxWidth: 860, overflow: "hidden" }}>
+        <Card
+          sx={{
+            flexGrow: 1,
+            width: "100%",
+            maxWidth: 860,
+            minWidth: 0,
+            height: { md: "100%" },
+            overflow: "auto",
+          }}
+        >
           <CardContent sx={{ p: { xs: 2, md: 3.5 } }}>
             {!current && <Typography color="text.secondary">从左侧选择文档</Typography>}
             {current && (

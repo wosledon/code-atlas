@@ -22,6 +22,10 @@ pub struct LlmSection {
     /// is forced to answer. 0 disables the file/read tools.
     #[serde(default = "default_tool_rounds")]
     pub max_tool_rounds: usize,
+    /// After writing a page, re-check it against the depth bar and ask the model
+    /// to expand it once when it is too thin.
+    #[serde(default = "default_depth_pass")]
+    pub depth_pass: bool,
 }
 
 fn default_provider() -> String {
@@ -48,6 +52,10 @@ fn default_tool_rounds() -> usize {
     6
 }
 
+fn default_depth_pass() -> bool {
+    true
+}
+
 fn default_timeout() -> u64 {
     180
 }
@@ -68,6 +76,7 @@ impl Default for LlmSection {
             timeout_secs: default_timeout(),
             retries: default_retries(),
             max_tool_rounds: default_tool_rounds(),
+            depth_pass: default_depth_pass(),
         }
     }
 }

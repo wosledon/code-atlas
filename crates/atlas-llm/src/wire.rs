@@ -28,12 +28,22 @@ impl ChatMessage {
     }
 }
 
+/// A `tool_calls[]` entry. It is both *parsed* from the model response and
+/// *echoed back* in the next request: the OpenAI schema requires the `type`
+/// discriminator on the way out, and providers reject the follow-up round
+/// (HTTP 400) when it is missing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ToolCallPayload {
     #[serde(default)]
     pub(crate) id: String,
+    #[serde(rename = "type", default = "tool_kind")]
+    pub(crate) kind: String,
     #[serde(default)]
     pub(crate) function: ToolCallFunction,
+}
+
+fn tool_kind() -> String {
+    "function".to_string()
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -90,4 +100,59 @@ pub(crate) struct MessageBody {
 pub(crate) struct UsageBody {
     pub(crate) prompt_tokens: Option<i64>,
     pub(crate) completion_tokens: Option<i64>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 工具回合的第二轮请求必须原样回传 assistant.tool_calls，且带上
+    /// `"type": "function"`——缺了它严格实现（含 stepfun 兼容接口）会直接 400，
+    /// 整页就退回模板。
+    #[test]
+    fn echoed_tool_calls_carry_the_function_type() {
+        let assistant = ChatMessage {
+            role: "assistant".into(),
+            content: None,
+            tool_calls: Some(vec![ToolCallPayload {
+                id: "call_1".into(),
+                kind: "function".into(),
+                function: ToolCallFunction {
+                    name: "read_file".into(),
+                    arguments: r#"{"path":"src/lib.rs"}"#.into(),
+                },
+            }]),
+            tool_call_id: None,
+        };
+        let body = serde_json::to_value(ChatMessage::tool("contents", "call_1")).unwrap();
+        assert_eq!(body["role"], "tool");
+        assert_eq!(body["tool_call_id"], "call_1");
+
+        let req = ChatRequest {
+            model: "m".into(),
+            messages: vec![assistant],
+            temperature: 0.2,
+            max_tokens: 16,
+            tools: vec![],
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["messages"][0]["tool_calls"][0]["type"], "function");
+        assert_eq!(json["messages"][0]["tool_calls"][0]["function"]["name"], "read_file");
+        assert!(
+            json.get("tools").is_none(),
+            "an empty tool list must be omitted, not sent as []"
+        );
+    }
+
+    #[test]
+    fn response_tool_calls_parse_without_a_type_field() {
+        let parsed: ChatResponse = serde_json::from_str(
+            r#"{"choices":[{"message":{"content":null,"tool_calls":[
+                 {"id":"call_1","function":{"name":"grep","arguments":"{}"}}]}}]}"#,
+        )
+        .unwrap();
+        let calls = parsed.choices.unwrap().into_iter().next().unwrap();
+        let calls = calls.message.unwrap().tool_calls.unwrap();
+        assert_eq!(calls[0].function.name, "grep");
+    }
 }

@@ -17,3 +17,11 @@ pub struct SourceFile {
     pub language: Option<String>,
     pub size: u64,
 }
+
+/// 一个文件里的一个声明（种类、名字、起始行号），由 [`crate::file_outline`] 产出。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OutlineItem {
+    pub line: usize,
+    pub kind: String,
+    pub name: String,
+}

@@ -1,41 +1,95 @@
-use super::run::{GeneratedPageWithMeta, RunContext, RunCounts};
+use super::run::{RunContext, RunCounts};
+use super::types::{GeneratedPageWithMeta, PageOutcome};
 use super::*;
 
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 
-/// Persist the generated bodies, refresh their claims and re-chunk only the
-/// pages whose body actually changed (unchanged pages keep their chunks and
-/// FTS rows, which makes incremental runs cheap).
-pub(super) async fn write_pages(
-    run: &RunContext<'_>,
-    generated: Vec<GeneratedPageWithMeta>,
-    counts: &mut RunCounts,
-) -> Result<()> {
-    let ctx = run.ctx;
-    let session = run.session;
-    let store = &session.store;
-    let run_id = session.run_id.as_str();
-    let atlas_root = &session.atlas_root;
-    let llm = run.llm;
-    let use_llm = run.use_llm;
+/// Label stored on chunk rows: the splitter used plus its signature (mode,
+/// target size, whether the LLM was available) so a config change invalidates
+/// the existing chunks instead of silently keeping the old split.
+pub(super) fn chunk_source_label(mode: &str, target_tokens: usize, use_llm: bool) -> String {
+    format!("{mode}|{target_tokens}|llm={use_llm}")
+}
 
-    let mp = MultiProgress::new();
-    let write_pb = mp.add(ProgressBar::new(generated.len() as u64));
-    write_pb.set_style(
-        ProgressStyle::with_template("{spinner:.green} 落盘 {pos}/{len} {msg}")
-            .unwrap_or_else(|_| ProgressStyle::default_spinner()),
-    );
-    write_pb.enable_steady_tick(std::time::Duration::from_millis(100));
+/// Persists finished pages **one at a time, while the rest are still being
+/// generated**: the model output reaches `atlas/` and the index as soon as it
+/// exists, so a long run is visible while it works and an interrupted or killed
+/// run keeps every page it already paid for.
+pub(super) struct PageWriter {
+    write_pb: ProgressBar,
+    chunk_label: String,
+    total_chunks: usize,
+    kept: Vec<String>,
+}
 
-    let mut total_chunks = 0usize;
-    for (_idx, page, body, usage, fingerprint, was_reused) in generated {
-        if was_reused {
-            counts.pages_reused += 1;
+impl PageWriter {
+    pub(super) fn new(
+        mp: &MultiProgress,
+        cfg: &AtlasConfig,
+        use_llm: bool,
+        total_pages: u64,
+    ) -> Self {
+        let write_pb = mp.add(ProgressBar::new(total_pages));
+        write_pb.set_style(
+            ProgressStyle::with_template("{spinner:.green} 落盘 {pos}/{len} {msg}")
+                .unwrap_or_else(|_| ProgressStyle::default_spinner()),
+        );
+        write_pb.enable_steady_tick(std::time::Duration::from_millis(100));
+        Self {
+            write_pb,
+            chunk_label: chunk_source_label(
+                &cfg.kb.chunk.mode,
+                cfg.kb.chunk.target_tokens,
+                use_llm,
+            ),
+            total_chunks: 0,
+            kept: Vec::new(),
         }
+    }
+
+    /// Write one page: front matter + body, claims, and (only when the body
+    /// actually changed) its chunks. Reused pages keep their chunks and FTS rows.
+    pub(super) async fn write(
+        &mut self,
+        run: &RunContext<'_>,
+        produced: GeneratedPageWithMeta,
+        counts: &mut RunCounts,
+    ) -> Result<()> {
+        let ctx = run.ctx;
+        let session = run.session;
+        let store = &session.store;
+        let run_id = session.run_id.as_str();
+        let atlas_root = &session.atlas_root;
+        let llm = run.llm;
+        let use_llm = run.use_llm;
+        let GeneratedPageWithMeta {
+            page,
+            body,
+            usage,
+            fingerprint,
+            outcome,
+        } = produced;
+
         if let Some((pt, ct, lat)) = usage {
             counts.prompt_tokens += pt;
             counts.completion_tokens += ct;
             store.record_llm_call(run_id, "page", llm.provider(), llm.model(), pt, ct, lat, "ok")?;
+        }
+        match outcome {
+            PageOutcome::Reused => counts.pages_reused += 1,
+            PageOutcome::Template => counts.template_pages += 1,
+            // The model failed for this page, but the previous version is still
+            // the best thing we have: leave the file, its claims and its chunks
+            // untouched and let the next run retry the fingerprint.
+            PageOutcome::KeptPrevious => {
+                counts.pages_kept += 1;
+                self.kept.push(page.rel_path.clone());
+                self.write_pb.inc(1);
+                self.write_pb
+                    .set_message(format!("{} · 生成失败，保留上一版", page.rel_path));
+                return Ok(());
+            }
+            PageOutcome::Generated => {}
         }
 
         let fm = FrontMatter::new(
@@ -70,20 +124,24 @@ pub(super) async fn write_pages(
         }
         write_page_claims(atlas_root, &page.rel_path, &claims)?;
 
-        // Re-chunk only when the body actually changed; otherwise the existing
-        // chunks (and their FTS rows) stay valid.
+        // Re-chunk only when the body actually changed *and* the existing chunks
+        // came from the current chunker; otherwise the split is rebuilt.
         let existing_chunks = store.count_chunks_for_page(&page.rel_path)?;
+        let chunks_current = store.count_chunks_for_page_with_signature(
+            &page.rel_path,
+            &self.chunk_label,
+        )? == existing_chunks;
         let unchanged = prev.as_ref().is_some_and(|p| p.body_hash == hash);
-        if unchanged && existing_chunks > 0 {
+        if unchanged && existing_chunks > 0 && chunks_current {
             counts.reused_chunks += 1;
-            total_chunks += existing_chunks as usize;
+            self.total_chunks += existing_chunks as usize;
             if let Some(m) = page.module.as_deref() {
                 link_page_to_module(store, run_id, &page.rel_path, m)?;
             }
             counts.pages_written.push(page.rel_path.clone());
-            write_pb.inc(1);
-            write_pb.set_message(page.rel_path.clone());
-            continue;
+            self.write_pb.inc(1);
+            self.write_pb.set_message(page.rel_path.clone());
+            return Ok(());
         }
 
         let mode_c = ChunkMode::parse(&ctx.cfg.kb.chunk.mode);
@@ -121,20 +179,45 @@ pub(super) async fn write_pages(
                 }
             }
         };
-        store_chunks(store, &page.rel_path, run_id, &atlas_kb::merge_small_chunks(specs), source)?;
-        total_chunks += store.count_chunks_for_page(&page.rel_path)? as usize;
+        store_chunks(
+            store,
+            &page.rel_path,
+            run_id,
+            &atlas_kb::merge_small_chunks(specs),
+            &format!("{source}|{}", self.chunk_label),
+        )?;
+        self.total_chunks += store.count_chunks_for_page(&page.rel_path)? as usize;
         if let Some(m) = page.module.as_deref() {
             link_page_to_module(store, run_id, &page.rel_path, m)?;
         }
         counts.pages_written.push(page.rel_path.clone());
-        write_pb.inc(1);
-        write_pb.set_message(page.rel_path.clone());
+        self.write_pb.inc(1);
+        self.write_pb.set_message(page.rel_path.clone());
+        Ok(())
     }
-    write_pb.finish_with_message(format!(
-        "已写入 {} 页 · chunks={total_chunks} · 复用页 {} · 复用分块 {}",
-        counts.pages_written.len(),
-        counts.pages_reused,
-        counts.reused_chunks
-    ));
-    Ok(())
+
+    /// Close the write progress bar and report what the run did with every page.
+    pub(super) fn finish(&self, counts: &mut RunCounts) {
+        self.write_pb.finish_with_message(format!(
+            "已写入 {} 页 · 模板 {} · chunks={} · 复用页 {} · 复用分块 {}",
+            counts.pages_written.len(),
+            counts.template_pages,
+            self.total_chunks,
+            counts.pages_reused,
+            counts.reused_chunks
+        ));
+        if !self.kept.is_empty() {
+            counts.notes.push(format!(
+                "kept the previous body of {} page(s) whose regeneration failed: {}",
+                self.kept.len(),
+                self.kept.join(", ")
+            ));
+            println!(
+                "[atlas] {} 页生成失败，已保留上一版正文（下次 update 会自动重试）：{}",
+                self.kept.len(),
+                self.kept.join(" / ")
+            );
+        }
+    }
 }
+

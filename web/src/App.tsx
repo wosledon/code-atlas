@@ -19,7 +19,7 @@ import MenuBookIcon from "@mui/icons-material/MenuBook";
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
 import HistoryIcon from "@mui/icons-material/History";
 import SettingsIcon from "@mui/icons-material/Settings";
-import { NavLink, Route, Routes } from "react-router-dom";
+import { NavLink, Route, Routes, useLocation } from "react-router-dom";
 import GraphPage from "./pages/Graph";
 import HomePage from "./pages/Home";
 import RunsPage from "./pages/Runs";
@@ -39,8 +39,14 @@ const nav = [
   { to: "/settings", label: "设置", icon: <SettingsIcon fontSize="small" /> },
 ];
 
+// Routes that manage their own scrolling: they get an app-shell layout where the
+// page itself never scrolls, so inner panes (tree, document) scroll independently.
+const FULL_HEIGHT_ROUTES = ["/reader"];
+
 export default function App() {
   const [health, setHealth] = useState<{ model?: string; provider?: string } | null>(null);
+  const { pathname } = useLocation();
+  const appShell = FULL_HEIGHT_ROUTES.includes(pathname);
 
   useEffect(() => {
     const url = new URLSearchParams(window.location.search).get("t");
@@ -145,9 +151,44 @@ export default function App() {
           ))}
         </List>
       </Drawer>
-      <Box component="main" sx={{ flexGrow: 1, pt: 11, px: { xs: 2, md: 4 }, pb: 6, position: "relative", zIndex: 1 }}>
-        <Container maxWidth="lg">
-          <div className="atlas-fade">
+      <Box
+        component="main"
+        sx={{
+          flexGrow: 1,
+          minWidth: 0,
+          pt: appShell ? { xs: 11, md: 9.5 } : 11,
+          px: { xs: 2, md: 4 },
+          pb: appShell ? { xs: 6, md: 3 } : 6,
+          position: "relative",
+          zIndex: 1,
+          ...(appShell
+            ? {
+                height: { xs: "auto", md: "100vh" },
+                overflow: { xs: "visible", md: "hidden" },
+                display: "flex",
+                flexDirection: "column",
+              }
+            : {}),
+        }}
+      >
+        <Container
+          maxWidth="lg"
+          sx={
+            appShell
+              ? {
+                  height: { md: "100%" },
+                  display: "flex",
+                  flexDirection: "column",
+                  minHeight: 0,
+                  flexGrow: { md: 1 },
+                }
+              : undefined
+          }
+        >
+          <div
+            className="atlas-fade"
+            style={appShell ? { height: "100%", display: "flex", flexDirection: "column", minHeight: 0, flexGrow: 1 } : undefined}
+          >
             <Routes>
               <Route path="/" element={<HomePage />} />
               <Route path="/chat" element={<SearchPage />} />

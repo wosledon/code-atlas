@@ -34,7 +34,11 @@ pub fn write_page(path: &Path, fm: &FrontMatter, body: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let content = format!("{}{}\n", fm.render(), body.trim_start_matches('\n'));
+    // Normalise the body so writing is idempotent: an LLM body usually ends
+    // with a newline and a reused body comes back from disk, yet both must
+    // produce the same bytes or the body hash (and the chunk split) would
+    // change on every run.
+    let content = format!("{}{}\n", fm.render(), body.trim_start_matches('\n').trim_end());
     atomic_write(path, content.as_bytes())
 }
 

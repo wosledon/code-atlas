@@ -2,6 +2,7 @@ use super::*;
 
 use super::plan::plan_pages;
 use super::plan_modules::detect_code_modules;
+use super::outline::{commands, manifest_summary, source_outline};
 
 /// Compact repository map handed to the model together with the file/read
 /// tools. It intentionally contains *no* large source dumps: the model pulls the
@@ -35,10 +36,8 @@ pub(crate) fn build_evidence(scan: &RepoScan, page: &PlannedPage) -> String {
             }
         }
     }
-    out.push_str("\n## Manifests\n");
-    for m in scan.manifests.iter().take(20) {
-        out.push_str(&format!("- {}\n", m.display()));
-    }
+    out.push_str(&manifest_summary(scan));
+    out.push_str(&commands(scan));
     out.push_str("\n## Modules discovered\n");
     for (key, label, hint) in detect_code_modules(scan).iter().take(16) {
         let files = scan
@@ -68,6 +67,7 @@ pub(crate) fn build_evidence(scan: &RepoScan, page: &PlannedPage) -> String {
         out.push_str(&format!("- {} ({}, {} B)\n", f.rel, lang_of(f), f.size));
         listed += 1;
     }
+    out.push_str(&source_outline(scan, page));
     out.push_str("\n## Documents this wiki will contain\n");
     for p in plan_pages(scan, "plan", None).iter().take(30) {
         out.push_str(&format!("- [{}]({}) — {}\n", p.title, p.rel_path, p.description));
@@ -83,11 +83,20 @@ pub(crate) fn module_scope(page: &PlannedPage) -> Option<String> {
         .map(|m| format!("{m}/"))
 }
 
-/// Fingerprint of the repository state a page depends on. Pages whose
+/// Fingerprint of everything a page depends on: the repository state (files and
+/// snippet sizes), the evidence built for it, and the `salt` describing how it
+/// will be generated (prompt text, model, generation knobs). Pages whose
 /// fingerprint is unchanged since the last run are reused verbatim.
-pub(crate) fn page_fingerprint(scan: &RepoScan, page: &PlannedPage, evidence: &str) -> String {
+pub(crate) fn page_fingerprint(
+    scan: &RepoScan,
+    page: &PlannedPage,
+    evidence: &str,
+    salt: &str,
+) -> String {
     let module_root = module_scope(page);
     let mut feed = String::new();
+    feed.push_str(salt);
+    feed.push('\n');
     feed.push_str(&page.focus);
     feed.push('\n');
     feed.push_str(evidence);

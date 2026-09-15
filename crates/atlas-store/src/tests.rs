@@ -73,6 +73,39 @@ fn search_falls_back_to_like_for_short_terms() {
 }
 
 #[test]
+fn chunk_signature_gate_rebuilds_after_chunker_change() {
+    let store = Store::open_in_memory().unwrap();
+    let mut fresh = chunk("ck_1", "a.md", 0, "t", "s", "body");
+    fresh.source = "llm-semantic|hybrid|512|llm=true".into();
+    let legacy = chunk("ck_2", "a.md", 1, "t", "s", "body");
+    store
+        .replace_chunks_for_page("a.md", "run-1", &[fresh, legacy])
+        .unwrap();
+
+    assert_eq!(store.count_chunks_for_page("a.md").unwrap(), 2);
+    assert_eq!(
+        store
+            .count_chunks_for_page_with_signature("a.md", "hybrid|512|llm=true")
+            .unwrap(),
+        1,
+        "only the chunk written by the current chunker may match"
+    );
+    assert_eq!(
+        store
+            .count_chunks_for_page_with_signature("a.md", "hybrid|256|llm=true")
+            .unwrap(),
+        0,
+        "changing kb.chunk.target_tokens must invalidate the stored split"
+    );
+    assert_eq!(
+        store
+            .count_chunks_for_page_with_signature("other.md", "hybrid|512|llm=true")
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
 fn stale_running_runs_are_reconciled() {
     let store = Store::open_in_memory().unwrap();
     store
