@@ -3,7 +3,6 @@ use crate::auth::{authorized, deny};
 use crate::common::open_store;
 use crate::search::search_mode;
 use axum::body::Body;
-use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::ReceiverStream;
@@ -179,7 +178,7 @@ pub(crate) async fn kb_chat(
 
         let (system, user) = prompt.expect("prompt built with llm");
         let tx_delta = tx.clone();
-        let sink = Arc::new(move |s: &str| {
+        let sink = atlas_llm::sink_fn(move |s: &str| {
             if !s.is_empty() {
                 let _ = tx_delta.try_send(emit(json!({ "type": "delta", "text": s })));
             }

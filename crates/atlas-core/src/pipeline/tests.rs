@@ -3,7 +3,10 @@ use std::path::PathBuf;
 
 use super::evidence::{build_evidence, page_fingerprint, read_page_body};
 use super::maintenance::first_heading;
+use super::write::PageDraft;
 use super::*;
+
+use atlas_llm::StreamSink;
 
 /// 最小的真实仓库样本：一个 manifest + 一个有声明行号的源文件。
 fn demo_repo(tag: &str) -> (PathBuf, RepoScan) {
@@ -123,5 +126,91 @@ fn reused_body_round_trips_through_write_and_read() {
 
     assert_eq!(written, fs::read_to_string(&path).unwrap());
     assert!(!written.ends_with("\n\n"));
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// A page the model is still writing must exist on disk while it is written:
+/// the draft carries the front matter, grows with every delta, and drops the
+/// narration a round emitted before calling a tool.
+#[test]
+fn page_draft_streams_to_disk_and_rolls_back_rounds() {
+    let (root, _scan) = demo_repo("draft");
+    let page = demo_page();
+    let path = root.join("atlas").join(&page.rel_path);
+    let draft = PageDraft::open(
+        path.clone(),
+        &FrontMatter::new("Architecture", &page.title, "分层", &["架构"]),
+    )
+    .unwrap();
+
+    draft.delta("## 概览\n\n第一段。");
+    let live = fs::read_to_string(&path).unwrap();
+    assert!(live.contains("title: 整体架构"), "{live}");
+    assert!(live.contains(markdown::DRAFT_MARKER), "{live}");
+    assert!(live.ends_with("第一段。"), "{live}");
+
+    // 工具回合里先说一句、再调用工具：这一轮的文本必须被回滚。
+    draft.round_start();
+    draft.delta("让我先读一下 src/lib.rs。");
+    draft.round_end(false);
+    let after = fs::read_to_string(&path).unwrap();
+    assert!(after.ends_with("第一段。"), "narration survived: {after}");
+
+    // 失败：文件回到这次运行之前的样子（这里原本不存在，于是草稿被清掉）。
+    draft.restore();
+    assert!(!path.exists(), "draft left behind: {path:?}");
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// A draft never replaces the previous real page it is replacing: when the run
+/// fails, the page comes back byte-for-byte.
+#[test]
+fn failed_page_is_restored_to_its_previous_bytes() {
+    let (root, _scan) = demo_repo("draft-rollback");
+    let page = demo_page();
+    let path = root.join("atlas").join(&page.rel_path);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let fm = FrontMatter::new("Architecture", &page.title, "分层", &["架构"]);
+    markdown::write_page(&path, &fm, "## 概览\n\n上一版正文。").unwrap();
+    let before = fs::read(&path).unwrap();
+
+    let draft = PageDraft::open(path.clone(), &fm).unwrap();
+    draft.delta("这一次重写……");
+    assert!(fs::read_to_string(&path).unwrap().contains("这一次重写"));
+    draft.restore();
+    assert_eq!(fs::read(&path).unwrap(), before, "previous page was not restored");
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// A draft is never reusable: `read_page_body` rejects it, so a killed run is
+/// regenerated instead of adopting half a page as the finished one.
+#[test]
+fn draft_files_are_not_reusable_bodies() {
+    let (root, _scan) = demo_repo("draft-reuse");
+    let page = demo_page();
+    let path = root.join("atlas").join(&page.rel_path);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+
+    markdown::write_page(
+        &path,
+        &FrontMatter::new("Architecture", &page.title, "分层", &["架构"]),
+        &format!("{}{}\n\n半页正文", markdown::DRAFT_MARKER, ""),
+    )
+    .unwrap();
+    assert!(read_page_body(&path).is_none(), "draft body was accepted");
+
+    markdown::write_page(
+        &path,
+        &FrontMatter::new("Architecture", &page.title, "分层", &["架构"]),
+        "## 概览\n\n完整正文。",
+    )
+    .unwrap();
+    assert_eq!(
+        read_page_body(&path).as_deref().map(str::trim),
+        Some("## 概览\n\n完整正文。")
+    );
+
     let _ = fs::remove_dir_all(&root);
 }

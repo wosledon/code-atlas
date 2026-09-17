@@ -124,7 +124,9 @@ pub(crate) fn strip_front_matter(text: &str) -> String {
 pub(crate) fn read_page_body(path: &Path) -> Option<String> {
     let text = std::fs::read_to_string(path).ok()?;
     let body = strip_front_matter(&text);
-    if body.trim().is_empty() {
+    // A draft (a page the model is still writing, or one a killed run left
+    // behind) must never be reused as if the model had produced it.
+    if body.trim().is_empty() || body.contains(markdown::DRAFT_MARKER) {
         None
     } else {
         Some(body)

@@ -6,17 +6,65 @@ use anyhow::{anyhow, Result};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-// Per-task sink for streamed text deltas (progress bars, live previews).
-// Task-local so concurrent page generations each see their own bar.
+// Per-task sink for streamed text deltas (progress bars, live page previews).
+// Task-local so concurrent page generations each see their own sink.
 tokio::task_local! {
-    static STREAM_SINK: Arc<dyn Fn(&str) + Send + Sync>;
+    static STREAM_SINK: Arc<dyn StreamSink>;
+}
+
+/// Where the text a model streams goes while it works.
+///
+/// Marks nest (one per tool round, one per HTTP attempt inside it): `round_start`
+/// remembers a position and `round_end(false)` drops everything written since —
+/// so phrasing that preceded a tool call, or the partial text of an attempt that
+/// is being retried, never lands in a live preview or a half-written page.
+pub trait StreamSink: Send + Sync {
+    /// One streamed content delta.
+    fn delta(&self, text: &str);
+    /// A round (or HTTP attempt) started; text from here on is provisional.
+    fn round_start(&self) {}
+    /// The round ended; `kept == false` rolls back to the matching `round_start`.
+    fn round_end(&self, kept: bool) {
+        let _ = kept;
+    }
+}
+
+/// Wrap a closure as a sink that ignores round boundaries.
+pub fn sink_fn<F>(f: F) -> Arc<dyn StreamSink>
+where
+    F: Fn(&str) + Send + Sync + 'static,
+{
+    struct FnSink<F>(F);
+    impl<F: Fn(&str) + Send + Sync> StreamSink for FnSink<F> {
+        fn delta(&self, text: &str) {
+            (self.0)(text)
+        }
+    }
+    Arc::new(FnSink(f))
+}
+
+/// Feed two sinks at once: the page's progress bar and the file on disk.
+pub fn sink_pair(a: Arc<dyn StreamSink>, b: Arc<dyn StreamSink>) -> Arc<dyn StreamSink> {
+    struct Pair(Arc<dyn StreamSink>, Arc<dyn StreamSink>);
+    impl StreamSink for Pair {
+        fn delta(&self, text: &str) {
+            self.0.delta(text);
+            self.1.delta(text);
+        }
+        fn round_start(&self) {
+            self.0.round_start();
+            self.1.round_start();
+        }
+        fn round_end(&self, kept: bool) {
+            self.0.round_end(kept);
+            self.1.round_end(kept);
+        }
+    }
+    Arc::new(Pair(a, b))
 }
 
 /// Run `fut` with every streamed content delta forwarded to `sink`.
-pub async fn with_stream_sink<F, T>(
-    sink: Arc<dyn Fn(&str) + Send + Sync>,
-    fut: F,
-) -> T
+pub async fn with_stream_sink<F, T>(sink: Arc<dyn StreamSink>, fut: F) -> T
 where
     F: std::future::Future<Output = T>,
 {
@@ -24,7 +72,18 @@ where
 }
 
 fn emit_delta(text: &str) {
-    let _ = STREAM_SINK.try_with(|sink| sink(text));
+    let _ = STREAM_SINK.try_with(|sink| sink.delta(text));
+}
+
+/// Open a mark: everything streamed until the matching [`emit_round_end`] is
+/// provisional.
+pub(crate) fn emit_round_start() {
+    let _ = STREAM_SINK.try_with(|sink| sink.round_start());
+}
+
+/// Close the innermost mark; `kept == false` discards what it produced.
+pub(crate) fn emit_round_end(kept: bool) {
+    let _ = STREAM_SINK.try_with(|sink| sink.round_end(kept));
 }
 
 #[derive(Default)]
@@ -69,6 +128,13 @@ impl StreamAccum {
 
     fn apply_tool_delta(&mut self, tc: &StreamToolCallDelta) {
         let idx = tc.index.unwrap_or(0);
+        if self.tools.is_empty() {
+            // The model is about to call a tool, so whatever it streamed before
+            // this was narration ("let me read X"), not page text. Drop it now
+            // instead of waiting for the round to close: a tool call takes long
+            // enough for a live preview to show it.
+            emit_round_end(false);
+        }
         let slot = self.tools.entry(idx).or_default();
         if let Some(id) = &tc.id {
             if !id.is_empty() {

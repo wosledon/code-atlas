@@ -7,7 +7,7 @@ use crate::wire::{
 };
 
 use super::sse::read_openai_sse;
-use super::{truncate, LlmClient};
+use super::{LlmClient, sse, truncate};
 
 /// Why one HTTP attempt failed, and whether it is worth trying again.
 enum Attempt {
@@ -92,6 +92,21 @@ impl LlmClient {
     }
 
     async fn post_chat_attempt(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[ToolSpec],
+        elapsed: Duration,
+        stream: bool,
+    ) -> std::result::Result<LlmTurn, Attempt> {
+        // Mark this attempt: a retried request must not leave the text it had
+        // already streamed before failing in the page being written.
+        sse::emit_round_start();
+        let out = self.post_chat_stream(messages, tools, elapsed, stream).await;
+        sse::emit_round_end(out.is_ok());
+        out
+    }
+
+    async fn post_chat_stream(
         &self,
         messages: &[ChatMessage],
         tools: &[ToolSpec],

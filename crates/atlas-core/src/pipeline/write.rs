@@ -2,13 +2,171 @@ use super::progress::Progress;
 use super::types::{GeneratedPageWithMeta, PageOutcome, PageReport};
 use super::*;
 
-use std::sync::Arc;
+use atlas_llm::StreamSink;
+use std::fs::File;
+use std::io::Write;
+use std::sync::{Arc, Mutex};
 
 /// Label stored on chunk rows: the splitter used plus its signature (mode,
 /// target size, whether the LLM was available) so a config change invalidates
 /// the existing chunks instead of silently keeping the old split.
 pub(super) fn chunk_source_label(mode: &str, target_tokens: usize, use_llm: bool) -> String {
     format!("{mode}|{target_tokens}|llm={use_llm}")
+}
+
+/// Body of one page while the model is still writing it: front matter first,
+/// then every streamed delta appended as it arrives, so `atlas/<page>.md` grows
+/// on disk instead of appearing only when the page is finished.
+///
+/// The draft is not the page: it carries [`markdown::DRAFT_MARKER`], which makes
+/// reuse and reindexing skip it, and a run that dies mid-page leaves it behind
+/// as recoverable text that the next run overwrites.
+pub(super) struct PageDraft {
+    path: PathBuf,
+    state: Mutex<DraftState>,
+}
+
+struct DraftState {
+    /// `None` once closed: the final write replaces the file behind our back.
+    file: Option<File>,
+    /// Current length of the file; tracked to avoid a `metadata()` per delta.
+    len: u64,
+    /// Position of the innermost open round (see [`StreamSink::round_start`]).
+    mark: u64,
+    /// The file as it was before this run, put back when generation fails.
+    previous: Option<Vec<u8>>,
+}
+
+impl PageWriter {
+    /// Open the page file and start streaming into it. `None` when the writer
+    /// has nothing to stream into (no LLM body is being written).
+    pub(super) fn begin_draft(&self, page: &PlannedPage) -> Result<Arc<PageDraft>> {
+        Ok(Arc::new(PageDraft::open(
+            self.atlas_root.join(&page.rel_path),
+            &FrontMatter::new(
+                &page.page_type,
+                &page.title,
+                &page.description,
+                &page.tags.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+            ),
+        )?))
+    }
+}
+
+impl PageDraft {
+    pub(super) fn open(path: PathBuf, fm: &FrontMatter) -> Result<Self> {
+        let previous = std::fs::read(&path)
+            .ok()
+            // A draft left by a killed run is not a page: never restore it.
+            .filter(|bytes| !contains_marker(bytes));
+        let draft = Self {
+            path,
+            state: Mutex::new(DraftState {
+                file: None,
+                len: 0,
+                mark: 0,
+                previous,
+            }),
+        };
+        draft.open_file(fm)?;
+        Ok(draft)
+    }
+
+    /// Truncate and write front matter + marker; the body follows as deltas.
+    fn open_file(&self, fm: &FrontMatter) -> Result<()> {
+        let mut state = self.lock();
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let header = format!("{}{}\n", fm.render(), markdown::DRAFT_MARKER);
+        let mut file = File::create(&self.path)?;
+        file.write_all(header.as_bytes())?;
+        file.flush()?;
+        state.len = header.len() as u64;
+        state.mark = state.len;
+        state.file = Some(file);
+        Ok(())
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, DraftState> {
+        self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Close the file handle so the writer can replace it atomically.
+    pub(super) fn close(&self) {
+        self.lock().file = None;
+    }
+
+    /// Generation failed: put the page back the way this run found it.
+    pub(super) fn restore(&self) {
+        self.close();
+        match self.lock().previous.take() {
+            Some(bytes) => {
+                if let Err(e) = markdown::atomic_write(&self.path, &bytes) {
+                    tracing::warn!("恢复 {} 失败: {e:#}", self.path.display());
+                }
+            }
+            None => {
+                if let Err(e) = std::fs::remove_file(&self.path) {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        tracing::warn!("清理草稿 {} 失败: {e:#}", self.path.display());
+                    }
+                }
+            }
+        }
+    }
+
+    fn append(&self, text: &str) {
+        let mut state = self.lock();
+        let Some(file) = state.file.as_mut() else {
+            return;
+        };
+        if file.write_all(text.as_bytes()).is_ok() {
+            state.len += text.len() as u64;
+        }
+    }
+
+    fn start_mark(&self) {
+        let mut state = self.lock();
+        state.mark = state.len;
+    }
+
+    /// Drop everything written since the last mark: text a round produced before
+    /// asking for a tool, or a partial attempt that is being retried.
+    fn rollback(&self) {
+        let mut state = self.lock();
+        let mark = state.mark;
+        if mark >= state.len {
+            return;
+        }
+        let Some(file) = state.file.as_mut() else {
+            return;
+        };
+        if file.set_len(mark).is_ok() {
+            state.len = mark;
+        }
+    }
+}
+
+impl StreamSink for PageDraft {
+    fn delta(&self, text: &str) {
+        self.append(text);
+    }
+
+    fn round_start(&self) {
+        self.start_mark();
+    }
+
+    fn round_end(&self, kept: bool) {
+        if !kept {
+            self.rollback();
+        }
+    }
+}
+
+fn contains_marker(bytes: &[u8]) -> bool {
+    let needle = markdown::DRAFT_MARKER.as_bytes();
+    bytes.windows(needle.len()).any(|w| w == needle)
 }
 
 /// Persists finished pages **from the task that generated them**: the model

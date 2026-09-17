@@ -4,7 +4,7 @@ use std::time::Instant;
 use crate::types::{LlmResponse, LlmUsage, ToolSpec};
 use crate::wire::{ChatMessage, ToolCallFunction, ToolCallPayload};
 
-use super::{truncate, LlmClient};
+use super::{LlmClient, sse, truncate};
 
 impl LlmClient {
     /// Ask the model to write something while letting it call read-only tools
@@ -37,7 +37,11 @@ impl LlmClient {
         for round in 0..=max_rounds {
             // Last round is tool-free, forcing the model to answer with text.
             let offer: &[ToolSpec] = if round < max_rounds { tools } else { &[] };
+            // Text a round emits before asking for a tool is usually narration
+            // ("let me read X"); it is discarded below so it never reaches the page.
+            sse::emit_round_start();
             let turn = self.post_chat(&messages, offer, started.elapsed()).await?;
+            sse::emit_round_end(turn.tool_calls.is_empty());
             prompt_tokens += turn.usage.prompt_tokens;
             completion_tokens += turn.usage.completion_tokens;
             if !turn.text.trim().is_empty() {
@@ -56,7 +60,11 @@ impl LlmClient {
             }
             messages.push(ChatMessage {
                 role: "assistant".into(),
-                content: if turn.text.trim().is_empty() { None } else { Some(turn.text.clone()) },
+                content: if turn.text.trim().is_empty() {
+                    None
+                } else {
+                    Some(turn.text.clone())
+                },
                 tool_calls: Some(
                     turn.tool_calls
                         .iter()

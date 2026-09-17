@@ -80,6 +80,11 @@ pub fn reindex(repo_root: &Path, cfg: &AtlasConfig) -> Result<usize> {
                 continue;
             }
             let text = std::fs::read_to_string(entry.path())?;
+            // A draft (page still streaming, or left behind by a killed run) is
+            // not a page: indexing it would hide the real body.
+            if text.contains(markdown::DRAFT_MARKER) {
+                continue;
+            }
             let hash = body_hash(&text);
             // Reindexing must not downgrade what `update` already learned about a
             // page: keep its title/type/description and evidence fingerprint so

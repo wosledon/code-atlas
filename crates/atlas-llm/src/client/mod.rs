@@ -2,6 +2,7 @@
 //!
 //! - [`LlmClient`]：对外入口，负责构造请求、重试与工具回合编排。
 //! - `tools`：`chat_with_tools` 的多轮工具循环。
+//! - `sse`：流式增量与 [`StreamSink`]（回合边界可回滚）。
 //! - `providers`：OpenAI 兼容接口与 Anthropic Messages 接口的单轮请求。
 
 use anyhow::{anyhow, Result};
@@ -14,7 +15,7 @@ mod providers;
 mod sse;
 mod tools;
 
-pub use sse::with_stream_sink;
+pub use sse::{StreamSink, sink_fn, sink_pair, with_stream_sink};
 
 pub struct LlmClient {
     cfg: LlmConfig,

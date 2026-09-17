@@ -4,9 +4,10 @@
 //! Concurrency, progress bars and streaming the results into the writer live in
 //! [`super::generate`]; this module only answers "what body does this page get".
 
-use super::brief::depth_gaps;
+use super::deepen::deepen_page;
+use super::model_call::call_model;
 use super::progress::PageBar;
-use super::prompt::{expand_messages, generate_messages};
+use super::prompt::generate_messages;
 use super::template::template_page_body;
 use super::types::{GeneratedPageWithMeta, PageJob, PageOutcome};
 use super::write::PageWriter;
@@ -140,14 +141,37 @@ impl PageGen {
             return self.templated(page, fingerprint, None);
         }
 
+        // The page file is opened before the first token and grows as the model
+        // writes: the wiki never waits for a long page to be finished, and a run
+        // that dies keeps the text that had already arrived.
+        let draft = writer.and_then(|w| match w.begin_draft(&page) {
+            Ok(d) => Some(d),
+            Err(e) => {
+                tracing::warn!("[{n}/{total}] {} 无法写入草稿: {e:#}", page.rel_path);
+                None
+            }
+        });
+
+        let label = format!("撰页 {n}/{total} {}", page.rel_path);
+        let sink = match &draft {
+            Some(d) => {
+                let draft_sink: Arc<dyn atlas_llm::StreamSink> = d.clone();
+                atlas_llm::sink_pair(pb.clone().stream_sink(label), draft_sink)
+            }
+            None => pb.clone().stream_sink(label),
+        };
+
         match atlas_llm::with_stream_sink(
-            pb.clone().stream_sink(format!("撰页 {n}/{total} {}", page.rel_path)),
+            sink,
             generate_page_with_llm(&self.llm, &evidence, &page, &self.cfg, &self.tools),
         )
         .await
         {
             Ok((usage, body)) if body.trim().chars().count() < 80 => {
                 self.counters.fail.fetch_add(1, Ordering::Relaxed);
+                if let Some(d) = &draft {
+                    d.restore();
+                }
                 if keep_body_on_failure {
                     return self.keep_previous(
                         &page,
@@ -170,19 +194,27 @@ impl PageGen {
                 // Land the first draft before any depth rewrite so the reader
                 // (and the index) see content as soon as the model finishes.
                 // usage=None: the final write reports the accumulated totals.
+                // The handle is closed first: the write replaces the file.
+                if let Some(d) = &draft {
+                    d.close();
+                }
                 if let Some(writer) = writer {
-                    let draft = GeneratedPageWithMeta {
+                    let first = GeneratedPageWithMeta {
                         page: page.clone(),
                         body: body.clone(),
                         usage: None,
                         fingerprint: fingerprint.clone(),
                         outcome: PageOutcome::Generated,
                     };
-                    if let Err(e) = writer.write(&self.llm, run_id, n, draft).await {
+                    if let Err(e) = writer.write(&self.llm, run_id, n, first).await {
                         tracing::warn!("[{n}/{total}] {} 首稿落盘失败: {e:#}", page.rel_path);
                     }
                 }
                 let (body, usage, expanded) = if self.cfg.llm.depth_pass {
+                    // The rewrite goes to memory, not to the file: reopening the
+                    // draft would truncate the first draft that just landed, and
+                    // a run killed mid-rewrite would lose it. The reader keeps
+                    // the complete first draft until the revision replaces it.
                     deepen_page(
                         &self.llm,
                         &self.tools,
@@ -199,6 +231,9 @@ impl PageGen {
                 } else {
                     (body, usage, false)
                 };
+                if let Some(d) = &draft {
+                    d.close();
+                }
                 if expanded {
                     self.counters.expanded.fetch_add(1, Ordering::Relaxed);
                 }
@@ -221,6 +256,9 @@ impl PageGen {
             }
             Err(e) => {
                 self.counters.fail.fetch_add(1, Ordering::Relaxed);
+                if let Some(d) = &draft {
+                    d.restore();
+                }
                 let msg = format!("{e:#}");
                 let short: String = msg.chars().take(100).collect();
                 if let Ok(mut slot) = self.counters.first_error.lock()
@@ -308,116 +346,10 @@ async fn generate_page_with_llm(
     call_model(llm, tools, cfg.llm.max_tool_rounds, &system, &user).await
 }
 
-/// 「扩写」：深度门发现页面太浅时，让模型带着缺口清单重写全文。
-#[allow(clippy::too_many_arguments)]
-async fn expand_page_with_llm(
-    llm: &LlmClient,
-    evidence: &str,
-    page: &PlannedPage,
-    cfg: &AtlasConfig,
-    tools: &RepoTools,
-    draft: &str,
-    gaps: &[String],
-) -> Result<((i64, i64, i64), String)> {
-    let (system, user) = expand_messages(cfg, page, gaps, draft, evidence);
-    // 只有一轮校验：草稿已带上模型读过的材料，再来一整轮工具往返等于重写一遍整页。
-    call_model(llm, tools, cfg.llm.max_tool_rounds.min(1), &system, &user).await
-}
-
-/// One model call with the repository tools attached (or a plain chat when tools
-/// are disabled). Returns the token/latency usage together with the text.
-async fn call_model(
-    llm: &LlmClient,
-    tools: &RepoTools,
-    rounds: usize,
-    system: &str,
-    user: &str,
-) -> Result<((i64, i64, i64), String)> {
-    if rounds > 0 && llm.supports_tools() {
-        let specs = RepoTools::specs();
-        match llm
-            .chat_with_tools(system, user, &specs, rounds, |name, args| tools.call(name, args))
-            .await
-        {
-            Ok(resp) => return Ok(usage_of(&resp)),
-            // A gateway may reject the tool protocol itself (empty follow-up
-            // round, schema validation, ...). Retry once tool-free: the model
-            // still has the evidence bundle, and a page written from evidence
-            // beats a structural template.
-            Err(e) => tracing::warn!("工具回合失败，改为无工具重试：{e:#}"),
-        }
-    }
-    Ok(usage_of(&llm.chat(system, user).await?))
-}
-
-fn usage_of(resp: &atlas_llm::LlmResponse) -> ((i64, i64, i64), String) {
-    (
-        (
-            resp.usage.prompt_tokens,
-            resp.usage.completion_tokens,
-            resp.usage.latency_ms,
-        ),
-        resp.text.clone(),
-    )
-}
-
 /// Pages whose body came from the structural template are *not* up to date:
 /// poisoning the stored fingerprint makes the next `atlas update` ask the model
 /// again instead of silently reusing template text (which is what happened after
 /// a failed LLM run or a key-less template run).
 fn template_fingerprint(fingerprint: &str) -> String {
     format!("{fingerprint}+template")
-}
-
-/// 深度门 + 一次扩写：正文通过则原样返回，未通过则尝试重写，取缺口更少的版本。
-/// 返回（最终正文, 累计用量, 是否真的重写了）。
-#[allow(clippy::too_many_arguments)]
-async fn deepen_page(
-    llm: &LlmClient,
-    tools: &RepoTools,
-    cfg: &AtlasConfig,
-    page: &PlannedPage,
-    evidence: &str,
-    body: String,
-    usage: (i64, i64, i64),
-    pb: &PageBar,
-    n: usize,
-    total_pages: u64,
-) -> (String, (i64, i64, i64), bool) {
-    let gaps = depth_gaps(&body, page);
-    if gaps.is_empty() {
-        return (body, usage, false);
-    }
-    pb.note(format!(
-        "扩写 {n}/{total_pages} {} · {} 项待补",
-        page.rel_path,
-        gaps.len()
-    ));
-    match atlas_llm::with_stream_sink(
-        pb.clone().stream_sink(format!("扩写 {n}/{total_pages} {}", page.rel_path)),
-        expand_page_with_llm(llm, evidence, page, cfg, tools, &body, &gaps),
-    )
-    .await
-    {
-        Ok((extra, revised)) => {
-            let total = (
-                usage.0 + extra.0,
-                usage.1 + extra.1,
-                usage.2 + extra.2,
-            );
-            let after = depth_gaps(&revised, page);
-            let improved = revised.trim().chars().count() >= 80
-                && (after.len() < gaps.len()
-                    || (after.len() == gaps.len() && revised.chars().count() > body.chars().count()));
-            if improved {
-                (revised, total, true)
-            } else {
-                (body, total, false)
-            }
-        }
-        Err(e) => {
-            tracing::warn!("[{n}/{total_pages}] {} 扩写失败: {e:#}", page.rel_path);
-            (body, usage, false)
-        }
-    }
 }

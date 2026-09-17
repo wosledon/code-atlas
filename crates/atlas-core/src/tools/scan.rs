@@ -1,8 +1,8 @@
 //! File listing / reading / grep / tree — the core evidence tools.
 
-use super::glob::{clip, is_skipped_dir, is_text_extension, shell_glob_match};
 use super::RepoTools;
-use anyhow::{anyhow, Result};
+use super::glob::{clip, is_skipped_dir, is_text_extension, shell_glob_match};
+use anyhow::{Result, anyhow};
 use std::path::Path;
 use walkdir::WalkDir;
 
@@ -43,7 +43,12 @@ impl RepoTools {
         Ok(out.join("\n"))
     }
 
-    pub(crate) fn read_file(&self, path: &str, start: Option<u64>, end: Option<u64>) -> Result<String> {
+    pub(crate) fn read_file(
+        &self,
+        path: &str,
+        start: Option<u64>,
+        end: Option<u64>,
+    ) -> Result<String> {
         let full = self.resolve(path)?;
         let meta = std::fs::metadata(&full)?;
         if meta.len() as usize > self.max_file_bytes {
@@ -62,7 +67,9 @@ impl RepoTools {
         let total = lines.len();
         let from = start.unwrap_or(1).max(1) as usize;
         if from > total {
-            return Err(anyhow!("start_line {from} is past the end of `{path}` ({total} lines)"));
+            return Err(anyhow!(
+                "start_line {from} is past the end of `{path}` ({total} lines)"
+            ));
         }
         // Un-ranged reads return one window and say how much is left: a whole
         // 2000-line file would be truncated mid-way anyway, and the model can

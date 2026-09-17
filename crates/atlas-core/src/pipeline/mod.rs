@@ -6,11 +6,13 @@
 //! per page, LLM or template) and each page task persists itself through
 //! `write`, `graph` seeds the entity graph and `maintenance` finishes the run.
 //! Supporting modules: `evidence` (prompt assembly), `brief` (per-page outline
-//! and the depth gate), `prompt` (the two generation prompts), `plan_modules`
-//! (repository layout detection) and `template` (offline fallback). `progress`
-//! owns the run bars and the plain log lines and hands them to the CLI through
-//! [`with_suspended_bars`]. Everything the CLI and the server use is re-exported
-//! here so `atlas_core::pipeline::*` stays a stable API.
+//! and the depth gate), `deepen` (the depth rewrite), `model_call` (one model
+//! call with the read-only tools), `prompt` (the two generation prompts),
+//! `plan_modules` (repository layout detection) and `template` (offline
+//! fallback). `progress` owns the run bars and the plain log lines and hands
+//! them to the CLI through [`with_suspended_bars`]. Everything the CLI and the
+//! server use is re-exported here so `atlas_core::pipeline::*` stays a stable
+//! API.
 use crate::git;
 use crate::lock::RunLock;
 use crate::markdown::{self, FrontMatter};
@@ -27,10 +29,12 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 mod brief;
+mod deepen;
 mod evidence;
 mod generate;
 mod graph;
 mod maintenance;
+mod model_call;
 mod outline;
 mod pagegen;
 mod plan;

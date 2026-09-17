@@ -196,9 +196,9 @@ impl PageBar {
     }
 
     /// Build a sink for `atlas_llm::with_stream_sink` bound to this bar.
-    pub(super) fn stream_sink(self, label: String) -> std::sync::Arc<dyn Fn(&str) + Send + Sync> {
+    pub(super) fn stream_sink(self, label: String) -> std::sync::Arc<dyn atlas_llm::StreamSink> {
         let chars = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        std::sync::Arc::new(move |delta: &str| {
+        atlas_llm::sink_fn(move |delta: &str| {
             let n = chars.fetch_add(delta.chars().count(), std::sync::atomic::Ordering::Relaxed)
                 + delta.chars().count();
             // Throttle redraws a bit: every ~200 chars is enough for a spinner.

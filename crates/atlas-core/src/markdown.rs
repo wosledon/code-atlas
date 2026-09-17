@@ -2,6 +2,11 @@ use anyhow::Result;
 use std::collections::BTreeMap;
 use std::path::Path;
 
+/// Written at the top of the body while a page is still being streamed to disk.
+/// A file that carries it is a draft — not a page — so reuse and reindexing skip
+/// it, and the finished write removes it.
+pub(crate) const DRAFT_MARKER: &str = "<!-- atlas:draft -->";
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct FrontMatter {
     pub fields: BTreeMap<String, String>,
