@@ -231,7 +231,7 @@ strategy = "in-repo"
 - **No decorative isometric code illustrations.** 架构用 Mermaid，且必须由检视过的源码支撑。
 - **No stub pages on init.** 空壳页比缺页更有害——init 最多 8 页且不写「TODO 占位」。
 - **No model in the critical no-op path.** 先用 git/哈希判定 no-op，再决定是否烧 token。
-- **No secrets in config/DB/logs.** 密钥只活在环境变量；配置文件与 SQLite 仅记 provider/model 名。
+- **密钥来源：** 优先环境变量（`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `ATLAS_API_KEY`），否则读 `atlas.toml [llm].api_key`；API/日志不回显明文。
 
 ## 8. Decision-Making
 

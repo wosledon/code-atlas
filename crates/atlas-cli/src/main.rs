@@ -102,7 +102,7 @@ enum Cmd {
     },
     /// Read-only integrity check
     Check,
-    /// Generate atlas.toml (defaults; secrets stay in env)
+    /// Generate atlas.toml (api_key optional; env vars still override)
     #[command(visible_alias = "config")]
     InitConfig {
         /// Write atlas.toml.example instead of atlas.toml

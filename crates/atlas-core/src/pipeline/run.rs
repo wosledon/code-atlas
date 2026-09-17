@@ -254,6 +254,7 @@ fn build_llm(ctx: &PipelineCtx) -> Result<LlmClient> {
     let llm_cfg = LlmConfig {
         provider: ctx.cfg.llm.provider.clone(),
         model: ctx.cfg.llm.model.clone(),
+        api_key: ctx.cfg.llm.api_key.clone(),
         base_url: ctx.cfg.llm.base_url.clone(),
         temperature: ctx.cfg.llm.temperature,
         max_output_tokens: ctx.cfg.llm.max_output_tokens.max(4096),

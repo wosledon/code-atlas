@@ -26,6 +26,11 @@ pub(crate) async fn get_config(State(state): State<AppState>, headers: HeaderMap
         return deny();
     }
     let cfg = &state.cfg;
+    // Never echo the key itself — only whether one is available.
+    let has_cfg_key = !cfg.llm.api_key.trim().is_empty();
+    let has_openai_key =
+        has_cfg_key || std::env::var("OPENAI_API_KEY").is_ok() || std::env::var("ATLAS_API_KEY").is_ok();
+    let has_anthropic_key = has_cfg_key || std::env::var("ANTHROPIC_API_KEY").is_ok();
     Json(json!({
         "provider": cfg.llm.provider,
         "model": cfg.llm.model,
@@ -39,8 +44,8 @@ pub(crate) async fn get_config(State(state): State<AppState>, headers: HeaderMap
         "atlas_root": state.atlas_root.display().to_string(),
         "chunk_mode": cfg.kb.chunk.mode,
         "target_tokens": cfg.kb.chunk.target_tokens,
-        "has_openai_key": std::env::var("OPENAI_API_KEY").is_ok(),
-        "has_anthropic_key": std::env::var("ANTHROPIC_API_KEY").is_ok(),
+        "has_openai_key": has_openai_key,
+        "has_anthropic_key": has_anthropic_key,
     }))
     .into_response()
 }

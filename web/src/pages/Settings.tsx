@@ -74,7 +74,7 @@ export default function SettingsPage() {
       <Box className="atlas-fade">
         <Typography variant="h4">设置</Typography>
         <Typography color="text.secondary" sx={{ mt: 0.5 }}>
-          服务入口 <code>atlas web</code> · 密钥只走环境变量
+          服务入口 <code>atlas web</code> · 密钥可写 <code>atlas.toml</code> 或环境变量（环境优先）
         </Typography>
       </Box>
       {err && <Alert severity="error">{err}</Alert>}

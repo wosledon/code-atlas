@@ -1,17 +1,22 @@
-# Code Atlas — 非密钥配置示例。密钥请用环境变量。
+# Code Atlas 配置。密钥可写在 [llm].api_key，或用环境变量（环境变量优先）。
 # OPENAI_API_KEY / ANTHROPIC_API_KEY / ATLAS_PROVIDER / ATLAS_MODEL
+# 此文件可提交；本地真实配置 atlas.toml / atlas.config.json 已在 .gitignore。
 
 [llm]
 provider = "openai-compatible"
 model = "qwen2.5-coder:32b"
+# 可选：直接写密钥。远程 OpenAI 兼容 / Anthropic 需要；本机 Ollama 可留空。
+api_key = ""
 base_url = "http://127.0.0.1:11434/v1"
 temperature = 0.2
 max_output_tokens = 16384
 concurrency = 5
 timeout_secs = 180
 retries = 3
-# 撰页时允许的只读工具轮数（list_files/read_file/grep）；0 关闭工具
+# How many read_file/list_files/grep rounds a page generation may use (0 disables tools).
 max_tool_rounds = 6
+# Re-check each page against the depth bar and let the model expand it once when it is too thin.
+depth_pass = true
 
 [privacy]
 redact_paths = ["**/.env", "**/*.pem", "**/id_rsa*", "**/credentials*.json"]

@@ -82,6 +82,7 @@ pub(crate) async fn kb_chat(State(state): State<AppState>, headers: HeaderMap, J
     let llm = atlas_llm::LlmClient::from_env(atlas_llm::LlmConfig {
         provider: state.cfg.llm.provider.clone(),
         model: state.cfg.llm.model.clone(),
+        api_key: state.cfg.llm.api_key.clone(),
         base_url: state.cfg.llm.base_url.clone(),
         temperature: 0.2,
         max_output_tokens: 2048,

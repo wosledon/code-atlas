@@ -1,9 +1,12 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct LlmConfig {
     pub provider: String,
     pub model: String,
+    /// Optional key from config; env vars still take precedence at client build.
+    #[serde(default)]
+    pub api_key: String,
     #[serde(default)]
     pub base_url: String,
     #[serde(default = "default_temp")]
@@ -14,6 +17,21 @@ pub struct LlmConfig {
     pub timeout_secs: u64,
     #[serde(default = "default_retries")]
     pub retries: u32,
+}
+
+impl std::fmt::Debug for LlmConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LlmConfig")
+            .field("provider", &self.provider)
+            .field("model", &self.model)
+            .field("api_key", &if self.api_key.is_empty() { "…" } else { "«redacted»" })
+            .field("base_url", &self.base_url)
+            .field("temperature", &self.temperature)
+            .field("max_output_tokens", &self.max_output_tokens)
+            .field("timeout_secs", &self.timeout_secs)
+            .field("retries", &self.retries)
+            .finish()
+    }
 }
 
 fn default_temp() -> f64 {
@@ -37,6 +55,7 @@ impl Default for LlmConfig {
         Self {
             provider: "openai-compatible".into(),
             model: "qwen2.5-coder:32b".into(),
+            api_key: String::new(),
             base_url: String::new(),
             temperature: default_temp(),
             max_output_tokens: default_max_tokens(),

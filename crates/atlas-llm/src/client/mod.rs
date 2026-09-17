@@ -31,9 +31,15 @@ fn key_env_vars(provider: &str) -> &'static [&'static str] {
 
 impl LlmClient {
     pub fn from_env(cfg: LlmConfig) -> Result<Self> {
+        // Env wins over atlas.toml so CI can inject keys without editing the repo.
         let api_key = key_env_vars(&cfg.provider)
             .iter()
-            .find_map(|var| std::env::var(var).ok());
+            .find_map(|var| std::env::var(var).ok())
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| {
+                let from_cfg = cfg.api_key.trim();
+                (!from_cfg.is_empty()).then(|| from_cfg.to_string())
+            });
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(cfg.timeout_secs))
             .build()?;
@@ -79,7 +85,7 @@ impl LlmClient {
         }
         let vars = key_env_vars(&self.cfg.provider).join(" 或 ");
         format!(
-            "provider={} model={} base_url={}：未设置 {vars}，远程服务缺少 key 只能返回 401",
+            "provider={} model={} base_url={}：未设置 {vars}（或 atlas.toml [llm].api_key），远程服务缺少 key 只能返回 401",
             self.cfg.provider, self.cfg.model, self.cfg.base_url
         )
     }

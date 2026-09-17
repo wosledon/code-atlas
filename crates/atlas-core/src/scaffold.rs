@@ -1,14 +1,17 @@
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 
-/// Default non-secret config template. Secrets stay in env vars.
+/// Default config template. Secrets may live in env vars or `[llm].api_key`.
 pub(crate) fn config_template() -> &'static str {
-    r#"# Code Atlas — 非密钥配置。密钥请用环境变量。
+    r#"# Code Atlas 配置。密钥可写在 [llm].api_key，或用环境变量（环境变量优先）。
 # OPENAI_API_KEY / ANTHROPIC_API_KEY / ATLAS_PROVIDER / ATLAS_MODEL
+# 此文件可提交；本地真实配置 atlas.toml / atlas.config.json 已在 .gitignore。
 
 [llm]
 provider = "openai-compatible"
 model = "qwen2.5-coder:32b"
+# 可选：直接写密钥。远程 OpenAI 兼容 / Anthropic 需要；本机 Ollama 可留空。
+api_key = ""
 base_url = "http://127.0.0.1:11434/v1"
 temperature = 0.2
 max_output_tokens = 16384

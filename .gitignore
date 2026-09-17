@@ -11,3 +11,6 @@
 atlas.lock
 atlas.lock.heartbeat
 .env
+# 本地配置（含密钥）不进仓；只提交 atlas.toml.example
+/atlas.toml
+/atlas.config.json

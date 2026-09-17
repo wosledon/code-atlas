@@ -1,11 +1,15 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct LlmSection {
     #[serde(default = "default_provider")]
     pub provider: String,
     #[serde(default = "default_model")]
     pub model: String,
+    /// Optional API key from `atlas.toml`. Env vars (`OPENAI_API_KEY` /
+    /// `ANTHROPIC_API_KEY` / `ATLAS_API_KEY`) still win when set.
+    #[serde(default)]
+    pub api_key: String,
     #[serde(default)]
     pub base_url: String,
     #[serde(default = "default_temp")]
@@ -26,6 +30,24 @@ pub struct LlmSection {
     /// to expand it once when it is too thin.
     #[serde(default = "default_depth_pass")]
     pub depth_pass: bool,
+}
+
+impl std::fmt::Debug for LlmSection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LlmSection")
+            .field("provider", &self.provider)
+            .field("model", &self.model)
+            .field("api_key", &if self.api_key.is_empty() { "…" } else { "«redacted»" })
+            .field("base_url", &self.base_url)
+            .field("temperature", &self.temperature)
+            .field("max_output_tokens", &self.max_output_tokens)
+            .field("concurrency", &self.concurrency)
+            .field("timeout_secs", &self.timeout_secs)
+            .field("retries", &self.retries)
+            .field("max_tool_rounds", &self.max_tool_rounds)
+            .field("depth_pass", &self.depth_pass)
+            .finish()
+    }
 }
 
 fn default_provider() -> String {
@@ -69,6 +91,7 @@ impl Default for LlmSection {
         Self {
             provider: default_provider(),
             model: default_model(),
+            api_key: String::new(),
             base_url: String::new(),
             temperature: default_temp(),
             max_output_tokens: default_max_tokens(),

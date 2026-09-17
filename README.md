@@ -17,7 +17,8 @@ cargo build -p atlas-cli --release
 
 # 2) optional config（也可跳过，用默认值 + 环境变量）
 ./target/release/atlas init-config       # 生成 atlas.toml
-export OPENAI_API_KEY=...          # or ANTHROPIC_API_KEY / Ollama
+# 密钥：atlas.toml [llm].api_key，或环境变量（环境变量优先）
+export OPENAI_API_KEY=...          # or ANTHROPIC_API_KEY / Ollama 本机可不设
 export ATLAS_MODEL=...             # optional
 
 # 3) generate wiki + KB
