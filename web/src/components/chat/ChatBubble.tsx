@@ -13,22 +13,37 @@ export function ChatBubble({
     <Box
       sx={{
         px: 2,
-        py: 1.5,
-        borderRadius: 3,
+        py: 1.35,
+        borderRadius: 2,
         border: "1px solid",
         maxWidth: "100%",
+        minWidth: 0,
         ...(variant === "user"
           ? {
-              borderColor: alpha("#3D8B6E", 0.28),
-              bgcolor: "linear-gradient(135deg, rgba(61,139,110,0.12), rgba(61,139,110,0.05))",
-              borderBottomRightRadius: 8,
+              borderColor: alpha("#3D8B6E", 0.3),
+              bgcolor: "#EEF6F3",
+              color: "#141A22",
+              borderBottomRightRadius: 6,
             }
           : {
               borderColor: "#E4E9F0",
               bgcolor: "#FFFFFF",
-              borderBottomLeftRadius: 8,
-              boxShadow: "0 2px 12px rgba(20,26,34,0.04)",
+              color: "#141A22",
+              borderBottomLeftRadius: 6,
+              boxShadow: "0 1px 2px rgba(20,26,34,0.04)",
             }),
+        // Markdown inside a bubble shouldn't blow out the layout.
+        "& .md-view": {
+          fontSize: 14.5,
+          lineHeight: 1.6,
+        },
+        "& .md-view pre": {
+          maxWidth: "100%",
+        },
+        "& .md-view table": {
+          display: "block",
+          overflowX: "auto",
+        },
       }}
     >
       {children}

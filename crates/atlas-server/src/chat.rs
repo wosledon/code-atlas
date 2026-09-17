@@ -1,14 +1,18 @@
 use super::*;
 use crate::auth::{authorized, deny};
-use crate::common::{err, open_store};
+use crate::common::{open_store};
 use crate::search::search_mode;
+use axum::body::Body;
+use std::sync::Arc;
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::StreamExt;
 
 #[derive(serde::Deserialize)]
 pub(crate) struct ChatMessageIn {
     role: String,
     content: String,
 }
-
 
 #[derive(serde::Deserialize)]
 pub(crate) struct ChatRequest {
@@ -17,8 +21,17 @@ pub(crate) struct ChatRequest {
     top_k: Option<i64>,
 }
 
-
-pub(crate) async fn kb_chat(State(state): State<AppState>, headers: HeaderMap, Json(body): Json<ChatRequest>) -> Response {
+/// Streaming knowledge-base chat.
+///
+/// SSE frames (each `data: <json>\n\n`):
+/// - `{"type":"meta","mode","sources","contexts"}`
+/// - `{"type":"delta","text"}` — answer tokens while the LLM streams
+/// - `{"type":"done","mode","answer","sources","contexts","usage"?}` — final
+pub(crate) async fn kb_chat(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<ChatRequest>,
+) -> Response {
     if !authorized(&state, &headers) {
         return deny();
     }
@@ -35,12 +48,12 @@ pub(crate) async fn kb_chat(State(state): State<AppState>, headers: HeaderMap, J
 
     let store = match open_store(&state) {
         Ok(s) => s,
-        Err(e) => return err(e),
+        Err(e) => return crate::common::err(e),
     };
     let top_k = body.top_k.unwrap_or(8);
     let hits = match store.search(&user_msg, top_k, search_mode(&state)) {
         Ok(h) => h,
-        Err(e) => return err(e),
+        Err(e) => return crate::common::err(e),
     };
 
     let sources: Vec<serde_json::Value> = hits
@@ -56,9 +69,6 @@ pub(crate) async fn kb_chat(State(state): State<AppState>, headers: HeaderMap, J
             })
         })
         .collect();
-
-    // Recalled material, shown in the UI next to the answer: the chunk summary
-    // plus the chunk body itself (self-contained evidence, no extra disk reads).
     let contexts: Vec<serde_json::Value> = hits
         .iter()
         .map(|h| {
@@ -78,7 +88,6 @@ pub(crate) async fn kb_chat(State(state): State<AppState>, headers: HeaderMap, J
 
     let retrieval_answer = format_hits_as_answer(&user_msg, &hits);
 
-    // no usable LLM → pure retrieval answer
     let llm = atlas_llm::LlmClient::from_env(atlas_llm::LlmConfig {
         provider: state.cfg.llm.provider.clone(),
         model: state.cfg.llm.model.clone(),
@@ -90,93 +99,138 @@ pub(crate) async fn kb_chat(State(state): State<AppState>, headers: HeaderMap, J
         retries: 0,
     });
     let llm = match llm {
-        Ok(c) if c.configured() && !c.is_host_agent() => c,
-        _ => {
-            return Json(json!({
-                "answer": retrieval_answer,
-                "mode": "retrieval",
-                "sources": sources,
-                "contexts": contexts,
-            }))
-            .into_response();
-        }
+        Ok(c) if c.configured() && !c.is_host_agent() => Some(c),
+        _ => None,
     };
 
-    // assemble grounded context from the recalled chunks themselves
-    let mut context = String::new();
-    for (i, h) in hits.iter().enumerate() {
-        let where_ = h
-            .page_path
-            .as_deref()
-            .map(|p| match (h.start_line, h.end_line) {
-                (Some(a), Some(b)) => format!("{p}:{a}-{b}"),
-                _ => p.to_string(),
-            })
-            .unwrap_or_else(|| "(repository graph)".into());
-        context.push_str(&format!("### [{}] {} · {}\n", i + 1, h.kind, where_));
-        context.push_str(&format!("Title: {}\nSummary: {}\n", h.title, h.summary));
-        if let Some(b) = h.body.as_deref() {
-            let clipped: String = b.chars().take(2400).collect();
-            context.push_str(&format!("Content:\n{clipped}\n"));
+    // Build the grounded prompt only when an LLM is available.
+    let prompt = llm.as_ref().map(|_| {
+        let mut context = String::new();
+        for (i, h) in hits.iter().enumerate() {
+            let where_ = h
+                .page_path
+                .as_deref()
+                .map(|p| match (h.start_line, h.end_line) {
+                    (Some(a), Some(b)) => format!("{p}:{a}-{b}"),
+                    _ => p.to_string(),
+                })
+                .unwrap_or_else(|| "(repository graph)".into());
+            context.push_str(&format!("### [{}] {} · {}\n", i + 1, h.kind, where_));
+            context.push_str(&format!("Title: {}\nSummary: {}\n", h.title, h.summary));
+            if let Some(b) = h.body.as_deref() {
+                let clipped: String = b.chars().take(2400).collect();
+                context.push_str(&format!("Content:\n{clipped}\n"));
+            }
+            context.push('\n');
         }
-        context.push('\n');
-    }
+        let history: Vec<String> = body
+            .messages
+            .iter()
+            .take(body.messages.len().saturating_sub(1))
+            .map(|m| format!("{}: {}", m.role, m.content))
+            .collect();
+        let mut user = String::new();
+        if !history.is_empty() {
+            user.push_str("Conversation so far:\n");
+            user.push_str(&history.join("\n"));
+            user.push_str("\n\n");
+        }
+        user.push_str(&format!("Question:\n{user_msg}"));
+        let system = format!(
+            "You are Code Atlas assistant. Answer in {}. \
+             Use ONLY the provided repository/wiki context for factual claims. \
+             Cite page paths like `atlas/architecture/overview.md` when used. \
+             If context is insufficient, say so briefly.\n\n## Context\n{}",
+            state.cfg.output.language,
+            context
+        );
+        (system, user)
+    });
 
-    let history: Vec<serde_json::Value> = body
-        .messages
-        .iter()
-        .take(body.messages.len().saturating_sub(1))
-        .map(|m| json!({"role": m.role, "content": m.content}))
-        .collect();
+    let (tx, rx) = mpsc::channel::<String>(128);
+    tokio::spawn(async move {
+        let emit = |v: serde_json::Value| format!("data: {}\n\n", v);
+        let _ = tx
+            .send(emit(json!({
+                "type": "meta",
+                "mode": if llm.is_some() { "llm" } else { "retrieval" },
+                "sources": sources,
+                "contexts": contexts,
+            })))
+            .await;
 
-    let system = format!(
-        "You are Code Atlas assistant. Answer in {}. \
-         Use ONLY the provided repository/wiki context for factual claims. \
-         Cite page paths like `atlas/architecture/overview.md` when used. \
-         If context is insufficient, say so briefly.\n\n## Context\n{}",
-        state.cfg.output.language,
-        context
-    );
+        let Some(llm) = llm else {
+            let _ = tx
+                .send(emit(json!({
+                    "type": "done",
+                    "mode": "retrieval",
+                    "answer": retrieval_answer,
+                    "sources": sources,
+                    "contexts": contexts,
+                })))
+                .await;
+            return;
+        };
 
-    let mut user = String::new();
-    if !history.is_empty() {
-        user.push_str("Conversation so far:\n");
-        for h in &history {
-            if let (Some(r), Some(c)) = (h["role"].as_str(), h["content"].as_str()) {
-                user.push_str(&format!("{r}: {c}\n"));
+        let (system, user) = prompt.expect("prompt built with llm");
+        let tx_delta = tx.clone();
+        let sink = Arc::new(move |s: &str| {
+            if !s.is_empty() {
+                let _ = tx_delta.try_send(emit(json!({ "type": "delta", "text": s })));
+            }
+        });
+
+        match atlas_llm::with_stream_sink(sink, llm.chat(&system, &user)).await {
+            Ok(resp) => {
+                let _ = tx
+                    .send(emit(json!({
+                        "type": "done",
+                        "mode": "llm",
+                        "answer": resp.text,
+                        "model": resp.model,
+                        "sources": sources,
+                        "contexts": contexts,
+                        "usage": {
+                            "prompt_tokens": resp.usage.prompt_tokens,
+                            "completion_tokens": resp.usage.completion_tokens,
+                        }
+                    })))
+                    .await;
+            }
+            Err(e) => {
+                tracing::warn!("kb chat llm failed, falling back to retrieval: {e:#}");
+                let _ = tx
+                    .send(emit(json!({
+                        "type": "done",
+                        "mode": "retrieval",
+                        "answer": retrieval_answer,
+                        "sources": sources,
+                        "contexts": contexts,
+                    })))
+                    .await;
             }
         }
-        user.push('\n');
-    }
-    user.push_str(&format!("Question:\n{user_msg}"));
+    });
 
-    match llm.chat(&system, &user).await {
-        Ok(resp) => Json(json!({
-            "answer": resp.text,
-            "mode": "llm",
-            "sources": sources,
-            "contexts": contexts,
-            "model": resp.model,
-            "usage": {
-                "prompt_tokens": resp.usage.prompt_tokens,
-                "completion_tokens": resp.usage.completion_tokens,
-            }
-        }))
-        .into_response(),
-        Err(_) => Json(json!({
-            "answer": retrieval_answer,
-            "mode": "retrieval",
-            "sources": sources,
-            "contexts": contexts,
-        }))
-        .into_response(),
-    }
+    let stream = ReceiverStream::new(rx).map(|chunk| Ok::<_, std::convert::Infallible>(chunk));
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", "text/event-stream")
+        .header("cache-control", "no-cache")
+        .header("x-accel-buffering", "no")
+        .body(Body::from_stream(stream))
+        .unwrap_or_else(|e| {
+            tracing::error!("sse response build failed: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "sse build failed").into_response()
+        })
 }
-
 
 pub(crate) fn format_hits_as_answer(question: &str, hits: &[SearchHit]) -> String {
     let mut md = String::new();
-    md.push_str(&format!("**未连接可用模型**，已改为直接返回知识库检索结果（问题：「{}」）。\n\n", question));
+    md.push_str(&format!(
+        "**未连接可用模型**，已改为直接返回知识库检索结果（问题：「{}」）。\n\n",
+        question
+    ));
     if hits.is_empty() {
         md.push_str("没有命中相关内容。可先运行 `atlas init` / `atlas update`，或换更短的关键词。\n");
         return md;

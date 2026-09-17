@@ -117,3 +117,59 @@ export type ChatResponse = {
   usage?: ChatUsage;
   error?: string;
 };
+
+export type ChatStreamEvent =
+  | { type: "meta"; mode?: "llm" | "retrieval"; sources?: ChatSource[]; contexts?: ChatContext[] }
+  | { type: "delta"; text: string }
+  | {
+      type: "done";
+      mode?: "llm" | "retrieval";
+      answer?: string;
+      sources?: ChatSource[];
+      contexts?: ChatContext[];
+      model?: string;
+      usage?: ChatUsage;
+    };
+
+/** POST and consume an SSE stream of `data: {json}` frames. */
+export async function streamApi(
+  path: string,
+  init: RequestInit,
+  onEvent: (ev: ChatStreamEvent) => void
+): Promise<void> {
+  const res = await fetch(path, {
+    ...init,
+    headers: {
+      Authorization: `${AUTH_SCHEME} ${getToken()}`,
+      Accept: "text/event-stream",
+      ...(init?.headers || {}),
+    },
+  });
+  if (!res.ok || !res.body) {
+    const body = await res.text().catch(() => "");
+    throw new Error(body || res.statusText);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let sep: number;
+    while ((sep = buf.indexOf("\n\n")) >= 0) {
+      const frame = buf.slice(0, sep);
+      buf = buf.slice(sep + 2);
+      for (const line of frame.split("\n")) {
+        if (!line.startsWith("data:")) continue;
+        const raw = line.slice(5).trim();
+        if (!raw || raw === "[DONE]") continue;
+        try {
+          onEvent(JSON.parse(raw) as ChatStreamEvent);
+        } catch {
+          /* ignore malformed frame */
+        }
+      }
+    }
+  }
+}

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { Box, Card, Stack, Typography } from "@mui/material";
+import { Box, Stack, Typography, alpha } from "@mui/material";
 import AutoAwesomeRoundedIcon from "@mui/icons-material/AutoAwesomeRounded";
-import { api, type ChatResponse } from "../lib/api";
+import { streamApi } from "../lib/api";
 import { ChatComposer } from "../components/chat/ChatComposer";
 import { ChatMessage, ChatPendingRow } from "../components/chat/ChatMessage";
 import type { ChatTurn } from "../components/chat/types";
@@ -28,31 +28,64 @@ export default function SearchPage() {
     const content = (text ?? input).trim();
     if (!content || busy) return;
     setInput("");
-    const next: ChatTurn[] = [...chat, { role: "user", content }];
-    setChat(next);
+    const history: ChatTurn[] = [...chat, { role: "user", content }];
+    setChat(history);
     setBusy(true);
-    try {
-      const messages = next.map((m) => ({ role: m.role, content: m.content }));
-      const res = await api<ChatResponse>("/api/kb/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages, top_k: 8 }),
+
+    // Placeholder assistant turn that fills as SSE deltas arrive.
+    const assistantIdx = history.length;
+    setChat((c) => [
+      ...c,
+      { role: "assistant", content: "", mode: "llm", sources: [], contexts: [] },
+    ]);
+
+    const patchAssistant = (patch: Partial<ChatTurn>) => {
+      setChat((c) => {
+        const next = [...c];
+        const cur = next[assistantIdx];
+        if (!cur) return c;
+        next[assistantIdx] = { ...cur, ...patch };
+        return next;
       });
-      setChat((c) => [
-        ...c,
+    };
+
+    try {
+      const messages = history.map((m) => ({ role: m.role, content: m.content }));
+      let acc = "";
+      await streamApi(
+        "/api/kb/chat",
         {
-          role: "assistant",
-          content: res.answer || res.error || "（空回答）",
-          mode: res.mode || "retrieval",
-          sources: res.sources || [],
-          contexts: res.contexts || [],
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ messages, top_k: 8 }),
         },
-      ]);
+        (ev) => {
+          if (ev.type === "meta") {
+            patchAssistant({
+              mode: ev.mode || "llm",
+              sources: ev.sources || [],
+              contexts: ev.contexts || [],
+            });
+          } else if (ev.type === "delta") {
+            acc += ev.text;
+            patchAssistant({ content: acc });
+          } else if (ev.type === "done") {
+            patchAssistant({
+              content: ev.answer || acc || "（空回答）",
+              mode: ev.mode || "llm",
+              sources: ev.sources || [],
+              contexts: ev.contexts || [],
+            });
+          }
+        }
+      );
+      // If the stream ended without a done frame, keep whatever arrived.
+      if (acc) patchAssistant({ content: acc });
     } catch (e) {
-      setChat((c) => [
-        ...c,
-        { role: "assistant", content: `请求失败：${String(e)}`, mode: "retrieval" },
-      ]);
+      patchAssistant({
+        content: `请求失败：${String(e)}`,
+        mode: "retrieval",
+      });
     } finally {
       setBusy(false);
       inputRef.current?.focus();
@@ -70,7 +103,10 @@ export default function SearchPage() {
           {chat.map((m, i) => (
             <ChatMessage key={i} turn={m} />
           ))}
-          {busy && <ChatPendingRow />}
+          {busy && chat[chat.length - 1]?.role === "user" && <ChatPendingRow />}
+          {busy && chat[chat.length - 1]?.role === "assistant" && !chat[chat.length - 1]?.content && (
+            <ChatPendingRow />
+          )}
           <div ref={endRef} />
         </Stack>
       )}
@@ -78,7 +114,7 @@ export default function SearchPage() {
       {empty && (
         <Stack
           direction="row"
-          spacing={1.25}
+          spacing={1}
           flexWrap="wrap"
           useFlexGap
           justifyContent="center"
@@ -86,20 +122,27 @@ export default function SearchPage() {
           sx={{ mb: 3 }}
         >
           {SUGGESTIONS.map((s) => (
-            <Card
+            <Box
               key={s}
               onClick={() => void send(s)}
               sx={{
-                px: 2,
-                py: 1.25,
+                px: 1.75,
+                py: 1,
+                borderRadius: 1.5,
+                border: "1px solid #E4E9F0",
+                bgcolor: "#fff",
                 cursor: "pointer",
-                "&:hover": { borderColor: "primary.main" },
+                transition: "border-color 0.15s ease, box-shadow 0.15s ease",
+                "&:hover": {
+                  borderColor: alpha("#1A6FB5", 0.45),
+                  boxShadow: "0 4px 14px rgba(26,111,181,0.1)",
+                },
               }}
             >
               <Typography variant="body2" fontWeight={600}>
                 {s}
               </Typography>
-            </Card>
+            </Box>
           ))}
         </Stack>
       )}
@@ -136,7 +179,7 @@ function Hero({ compact }: { compact: boolean }) {
         问 Code Atlas
       </Typography>
       <Typography color="text.secondary" align="center" sx={{ maxWidth: 480 }}>
-        基于仓内 Wiki / 知识库回答。无模型时自动退回检索结果，不再单独做关键词搜索页。
+        基于仓内 Wiki / 知识库流式回答。无模型时自动退回检索结果。
       </Typography>
     </Stack>
   );

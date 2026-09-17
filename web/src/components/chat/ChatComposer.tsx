@@ -1,4 +1,4 @@
-import { Card, IconButton, Stack, TextField, alpha } from "@mui/material";
+import { Box, IconButton, Stack, TextField, alpha } from "@mui/material";
 import SendRoundedIcon from "@mui/icons-material/SendRounded";
 import type { RefObject } from "react";
 
@@ -17,15 +17,18 @@ export function ChatComposer({
   onSend: () => void;
 }) {
   return (
-    <Card
+    <Box
       className="atlas-fade"
       sx={{
         position: "sticky",
         bottom: 16,
-        p: 1.25,
-        bgcolor: "rgba(255,255,255,0.92)",
-        backdropFilter: "blur(10px)",
-        boxShadow: "0 8px 32px rgba(20,26,34,0.08)",
+        zIndex: 5,
+        p: 1,
+        borderRadius: 1.5,
+        bgcolor: "rgba(255,255,255,0.96)",
+        border: "1px solid #E4E9F0",
+        boxShadow: "0 8px 28px rgba(20,26,34,0.08)",
+        backdropFilter: "blur(12px)",
       }}
     >
       <Stack direction="row" spacing={1} alignItems="flex-end">
@@ -42,11 +45,17 @@ export function ChatComposer({
           placeholder="问仓库任何事…"
           fullWidth
           multiline
-          maxRows={4}
+          maxRows={5}
           variant="standard"
           InputProps={{
             disableUnderline: true,
-            sx: { px: 1, py: 0.5, fontSize: 15 },
+            sx: {
+              px: 1.25,
+              py: 0.75,
+              fontSize: 15,
+              lineHeight: 1.5,
+              bgcolor: "transparent",
+            },
           }}
         />
         <IconButton
@@ -58,13 +67,19 @@ export function ChatComposer({
             color: "#fff",
             width: 40,
             height: 40,
+            borderRadius: 1.5,
+            flexShrink: 0,
+            boxShadow: "0 4px 12px rgba(26,111,181,0.28)",
             "&:hover": { bgcolor: "primary.dark" },
-            "&.Mui-disabled": { bgcolor: alpha("#1A6FB5", 0.35) },
+            "&.Mui-disabled": {
+              bgcolor: alpha("#1A6FB5", 0.28),
+              color: "rgba(255,255,255,0.9)",
+            },
           }}
         >
           <SendRoundedIcon fontSize="small" />
         </IconButton>
       </Stack>
-    </Card>
+    </Box>
   );
 }

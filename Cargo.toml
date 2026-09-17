@@ -30,6 +30,7 @@ walkdir = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 clap = { version = "4", features = ["derive", "env"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "io-util", "io-std", "time", "sync", "signal"] }
+tokio-stream = "0.1"
 axum = { version = "0.8", features = ["json", "query"] }
 tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
 rusqlite = { version = "0.32", features = ["bundled"] }

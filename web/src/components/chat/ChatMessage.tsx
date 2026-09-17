@@ -14,7 +14,7 @@ export function ChatMessage({ turn: m }: { turn: ChatTurn }) {
   if (m.role === "user") {
     return (
       <Stack direction="row" justifyContent="flex-end" className="atlas-fade">
-        <Stack direction="row" spacing={1.25} alignItems="flex-end" sx={{ maxWidth: "85%" }}>
+        <Stack direction="row" spacing={1} alignItems="flex-end" sx={{ maxWidth: "85%" }}>
           <ChatBubble variant="user">
             <Typography sx={{ whiteSpace: "pre-wrap", fontSize: 15, lineHeight: 1.55 }}>
               {m.content}
@@ -36,7 +36,7 @@ export function ChatMessage({ turn: m }: { turn: ChatTurn }) {
 
   const isLlm = m.mode === "llm";
   return (
-    <Stack direction="row" spacing={1.25} alignItems="flex-start" className="atlas-fade">
+    <Stack direction="row" spacing={1} alignItems="flex-start" className="atlas-fade">
       <Avatar
         sx={{
           ...AVATAR_SX,
@@ -48,7 +48,13 @@ export function ChatMessage({ turn: m }: { turn: ChatTurn }) {
       </Avatar>
       <Box sx={{ flex: 1, minWidth: 0 }}>
         <ChatBubble variant="bot">
-          <MarkdownView source={m.content} />
+          {m.content ? (
+            <MarkdownView source={m.content} />
+          ) : (
+            <Typography color="text.secondary" sx={{ fontSize: 14 }}>
+              正在生成…
+            </Typography>
+          )}
           {m.sources && <SourceChips sources={m.sources} />}
           {m.contexts && m.contexts.length > 0 && <RecalledContexts contexts={m.contexts} />}
         </ChatBubble>
