@@ -783,7 +783,7 @@ atlas reindex
 atlas web [--port 4321] [--insecure] [--web-dist <dir>]   # 兼容别名：serve
 atlas export <dir>
 atlas check                # 只读校验：入口页、正文长度、相对链接（退出码非 0 即不通过）
-atlas init-config          # 写 atlas.toml.example
+atlas init-config [--example] [--force]  # 默认写 atlas.toml；--example 写 .example；--force 覆盖
 ```
 
 ### K.10 输出位置策略（Markdown 不必进代码库）

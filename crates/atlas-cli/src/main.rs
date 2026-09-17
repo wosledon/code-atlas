@@ -102,8 +102,16 @@ enum Cmd {
     },
     /// Read-only integrity check
     Check,
-    /// Write atlas.toml.example
-    InitConfig,
+    /// Generate atlas.toml (defaults; secrets stay in env)
+    #[command(visible_alias = "config")]
+    InitConfig {
+        /// Write atlas.toml.example instead of atlas.toml
+        #[arg(long)]
+        example: bool,
+        /// Overwrite if the file already exists
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[tokio::main]
@@ -122,8 +130,9 @@ async fn main() -> Result<()> {
     let mut cfg = AtlasConfig::load(&repo_root)?;
 
     match cli.cmd {
-        Cmd::InitConfig => {
-            let p = atlas_core::write_example_config(&repo_root)?;
+        Cmd::InitConfig { example, force } => {
+            let name = if example { "atlas.toml.example" } else { "atlas.toml" };
+            let p = atlas_core::write_config_file(&repo_root, name, force)?;
             println!("wrote {}", p.display());
         }
         Cmd::Init { ci, instruction, provider, model } => {

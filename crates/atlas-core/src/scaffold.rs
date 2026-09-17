@@ -1,9 +1,9 @@
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 
-pub fn write_example_config(repo_root: &Path) -> Result<PathBuf> {
-    let p = repo_root.join("atlas.toml.example");
-    let example = r#"# Code Atlas — 非密钥配置示例。密钥请用环境变量。
+/// Default non-secret config template. Secrets stay in env vars.
+pub(crate) fn config_template() -> &'static str {
+    r#"# Code Atlas — 非密钥配置。密钥请用环境变量。
 # OPENAI_API_KEY / ANTHROPIC_API_KEY / ATLAS_PROVIDER / ATLAS_MODEL
 
 [llm]
@@ -47,9 +47,21 @@ language = "zh-CN"
 
 [analyze]
 languages = ["rust", "typescript", "javascript", "python"]
-"#;
-    std::fs::write(&p, example)?;
+"#
+}
+
+/// Write `atlas.toml` (or another file name) from the default template.
+pub fn write_config_file(repo_root: &Path, file_name: &str, force: bool) -> Result<PathBuf> {
+    let p = repo_root.join(file_name);
+    if p.exists() && !force {
+        anyhow::bail!("{} already exists (use --force to overwrite)", p.display());
+    }
+    std::fs::write(&p, config_template())?;
     Ok(p)
+}
+
+pub fn write_example_config(repo_root: &Path) -> Result<PathBuf> {
+    write_config_file(repo_root, "atlas.toml.example", true)
 }
 
 pub fn ensure_agents_pointer(repo_root: &Path, atlas_root_rel: &str) -> Result<()> {

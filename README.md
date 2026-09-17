@@ -15,8 +15,8 @@ Living wiki · knowledge graph · knowledge base for code repositories.
 cd web && npm install && npm run build && cd ..
 cargo build -p atlas-cli --release
 
-# 2) optional config
-cp atlas.toml.example atlas.toml
+# 2) optional config（也可跳过，用默认值 + 环境变量）
+./target/release/atlas init-config       # 生成 atlas.toml
 export OPENAI_API_KEY=...          # or ANTHROPIC_API_KEY / Ollama
 export ATLAS_MODEL=...             # optional
 

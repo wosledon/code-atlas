@@ -23,4 +23,4 @@ pub use config::{
     PrivacySection,
 };
 pub use paths::{repo_slug, resolve_repo_root, sha256_hex};
-pub use scaffold::{ensure_agents_pointer, write_example_config};
+pub use scaffold::{ensure_agents_pointer, write_config_file, write_example_config};
