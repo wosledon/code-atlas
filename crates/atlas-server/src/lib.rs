@@ -18,6 +18,7 @@ mod chat;
 mod common;
 mod config;
 mod graph;
+pub mod mcp;
 mod projects;
 mod runs;
 mod search;

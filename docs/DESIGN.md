@@ -627,6 +627,7 @@ chunk_entities(chunk_id, entity_key)
 - 上下文包优先 **summary 导航 + 选中 body**，避免整页灌入；组装只读 DB 里的 chunk（不再回头读 md 文件）。
 - CLI：`atlas search "..."`（`--limit N`，检索后端由 `kb.search` 选择 `auto|fts5|like`）；`atlas ask "..."` 后置。
 - Agent/MCP：`kb_search` / `kb_chunk` / `kb_entity` / `kb_neighborhood`。
+- **LLM 传输：** OpenAI 兼容接口优先 `stream: true`（SSE `data:` 行折叠为完整 `LlmTurn`）；网关若忽略 stream 回 JSON 则自动回退。Anthropic Messages 暂为非流式。
 
 ### J.5 质量门禁
 
@@ -784,6 +785,7 @@ atlas web [--port 4321] [--insecure] [--web-dist <dir>]   # 兼容别名：serve
 atlas export <dir>
 atlas check                # 只读校验：入口页、正文长度、相对链接（退出码非 0 即不通过）
 atlas init-config [--example] [--force]  # 默认写 atlas.toml；--example 写 .example；--force 覆盖
+atlas mcp                    # MCP stdio：search/read/write/delete page、chunks、status、plan、check、reindex、update、entities/graph
 ```
 
 ### K.10 输出位置策略（Markdown 不必进代码库）

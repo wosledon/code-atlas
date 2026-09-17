@@ -75,4 +75,28 @@ impl Store {
         }
         Ok(())
     }
+
+    /// Chunks of one page in document order — used by MCP / agents to inspect
+    /// what the KB actually indexed for a wiki page.
+    pub fn list_chunks_for_page(&self, page_path: &str) -> Result<Vec<ChunkRow>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, page_path, ord, title, summary, body, start_line, end_line, source
+             FROM chunks WHERE page_path=?1 ORDER BY ord",
+        )?;
+        let rows = stmt.query_map(params![page_path], |r| {
+            Ok(ChunkRow {
+                id: r.get(0)?,
+                page_path: r.get(1)?,
+                ord: r.get(2)?,
+                title: r.get(3)?,
+                summary: r.get(4)?,
+                body: r.get(5)?,
+                start_line: r.get(6)?,
+                end_line: r.get(7)?,
+                source: r.get(8)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
 }

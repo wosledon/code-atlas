@@ -128,7 +128,12 @@ impl PageGen {
             return self.templated(page, fingerprint, None);
         }
 
-        match generate_page_with_llm(&self.llm, &evidence, &page, &self.cfg, &self.tools).await {
+        match atlas_llm::with_stream_sink(
+            pb.clone().stream_sink(format!("撰页 {n}/{total} {}", page.rel_path)),
+            generate_page_with_llm(&self.llm, &evidence, &page, &self.cfg, &self.tools),
+        )
+        .await
+        {
             Ok((usage, body)) if body.trim().chars().count() < 80 => {
                 self.counters.fail.fetch_add(1, Ordering::Relaxed);
                 if keep_body_on_failure {
@@ -361,7 +366,12 @@ async fn deepen_page(
         page.rel_path,
         gaps.len()
     ));
-    match expand_page_with_llm(llm, evidence, page, cfg, tools, &body, &gaps).await {
+    match atlas_llm::with_stream_sink(
+        pb.clone().stream_sink(format!("扩写 {n}/{total_pages} {}", page.rel_path)),
+        expand_page_with_llm(llm, evidence, page, cfg, tools, &body, &gaps),
+    )
+    .await
+    {
         Ok((extra, revised)) => {
             let total = (
                 usage.0 + extra.0,

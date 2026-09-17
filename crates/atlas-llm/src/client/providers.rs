@@ -6,6 +6,7 @@ use crate::wire::{
     ChatMessage, ChatRequest, ChatResponse, MessageBody, ToolFunctionPayload, ToolPayload,
 };
 
+use super::sse::read_openai_sse;
 use super::{truncate, LlmClient};
 
 /// Why one HTTP attempt failed, and whether it is worth trying again.
@@ -89,6 +90,7 @@ impl LlmClient {
             temperature: self.cfg.temperature,
             max_tokens: self.cfg.max_output_tokens,
             tools: payloads,
+            stream: true,
         };
         let url = format!("{}/chat/completions", self.resolve_base_url());
         let key = self
@@ -99,18 +101,41 @@ impl LlmClient {
             .http
             .post(&url)
             .bearer_auth(key)
+            .header("accept", "text/event-stream")
             .json(&body)
             .send()
             .await
             .map_err(|e| Attempt::Transient(anyhow!("llm transport error @ {url}: {e}")))?;
         let status = resp.status();
+        if !status.is_success() {
+            let text = resp
+                .text()
+                .await
+                .unwrap_or_default();
+            return Err(Attempt::from_status(status, &text, &url));
+        }
+
+        // Prefer SSE. Some OpenAI-compatible gateways ignore `stream` and
+        // answer with a single JSON body — fall back to that parse path.
+        let ctype = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let looks_like_sse = ctype.contains("text/event-stream");
+
+        if looks_like_sse {
+            let acc = read_openai_sse(resp)
+                .await
+                .map_err(|e| Attempt::Transient(anyhow!("llm stream error @ {url}: {e:#}")))?;
+            return Ok(acc.finish(&self.cfg.model, elapsed.as_millis() as i64));
+        }
+
         let text = resp
             .text()
             .await
             .map_err(|e| Attempt::Transient(anyhow!("llm response read error: {e}")))?;
-        if !status.is_success() {
-            return Err(Attempt::from_status(status, &text, &url));
-        }
         let parsed: ChatResponse = serde_json::from_str(&text)?;
         let message = parsed
             .choices

@@ -76,6 +76,41 @@ pub(crate) struct ChatRequest<'a> {
     pub(crate) max_tokens: u32,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) tools: Vec<ToolPayload<'a>>,
+    /// Ask the provider for SSE (`data:` lines) instead of one JSON body.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) stream: bool,
+}
+
+/// One OpenAI-compatible streaming chunk (`choices[0].delta`).
+#[derive(Debug, Deserialize)]
+pub(crate) struct StreamChunk {
+    pub(crate) choices: Option<Vec<StreamChoice>>,
+    pub(crate) usage: Option<UsageBody>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct StreamChoice {
+    pub(crate) delta: Option<StreamDelta>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct StreamDelta {
+    pub(crate) content: Option<String>,
+    #[serde(default)]
+    pub(crate) tool_calls: Option<Vec<StreamToolCallDelta>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct StreamToolCallDelta {
+    pub(crate) index: Option<usize>,
+    pub(crate) id: Option<String>,
+    pub(crate) function: Option<StreamToolFnDelta>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct StreamToolFnDelta {
+    pub(crate) name: Option<String>,
+    pub(crate) arguments: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -134,6 +169,7 @@ mod tests {
             temperature: 0.2,
             max_tokens: 16,
             tools: vec![],
+            stream: false,
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["messages"][0]["tool_calls"][0]["type"], "function");

@@ -187,6 +187,27 @@ impl PageBar {
         }
     }
 
+    /// Live tick while the model streams: show how many characters arrived.
+    pub(super) fn stream_tick(&self, label: &str, chars: usize) {
+        if self.bars {
+            self.bar
+                .set_message(format!("流式 {label} · {chars} 字"));
+        }
+    }
+
+    /// Build a sink for `atlas_llm::with_stream_sink` bound to this bar.
+    pub(super) fn stream_sink(self, label: String) -> std::sync::Arc<dyn Fn(&str) + Send + Sync> {
+        let chars = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        std::sync::Arc::new(move |delta: &str| {
+            let n = chars.fetch_add(delta.chars().count(), std::sync::atomic::Ordering::Relaxed)
+                + delta.chars().count();
+            // Throttle redraws a bit: every ~200 chars is enough for a spinner.
+            if n % 200 < delta.chars().count().max(1) || n < 40 {
+                self.stream_tick(&label, n);
+            }
+        })
+    }
+
     /// Permanent result of the page.
     pub(super) fn done(&self, text: String) {
         if self.bars {

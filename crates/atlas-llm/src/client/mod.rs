@@ -11,7 +11,10 @@ use crate::types::{LlmConfig, LlmResponse};
 use crate::wire::ChatMessage;
 
 mod providers;
+mod sse;
 mod tools;
+
+pub use sse::with_stream_sink;
 
 pub struct LlmClient {
     cfg: LlmConfig,

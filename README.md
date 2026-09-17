@@ -38,6 +38,7 @@ export ATLAS_MODEL=...             # optional
 | 入口 | 说明 |
 |---|---|
 | **`atlas web`** | CLI 统一入口：REST API + 静态前端（`serve` 为兼容别名）；前端默认编入二进制，`--web-dist` 可覆盖 |
+| **`atlas mcp`** | MCP stdio：检索/读页/写页/行替换/删页/chunk/图谱/校验/reindex/update |
 | **`http://127.0.0.1:4321/?t=<token>`** | 项目卡片（`/`）：名称、语言、页数/chunk、最近更新与状态，点卡片进入 Wiki |
 | **`http://127.0.0.1:4321/reader?p=<rel_path>`** | Wiki 文档阅读（默认 `quickstart.md`，深链可分享） |
 | **`http://127.0.0.1:4321/chat`** | 知识库对话：回答 + **召回内容**（页路径/行号/片段） |

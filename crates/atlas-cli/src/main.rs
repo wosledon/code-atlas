@@ -112,6 +112,8 @@ enum Cmd {
         #[arg(long)]
         force: bool,
     },
+    /// Start MCP server on stdio (search / read page / status / plan)
+    Mcp,
 }
 
 #[tokio::main]
@@ -134,6 +136,10 @@ async fn main() -> Result<()> {
             let name = if example { "atlas.toml.example" } else { "atlas.toml" };
             let p = atlas_core::write_config_file(&repo_root, name, force)?;
             println!("wrote {}", p.display());
+        }
+        Cmd::Mcp => {
+            // stdout is reserved for JSON-RPC; logs already go to stderr.
+            atlas_server::mcp::serve_stdio(repo_root, cfg).await?;
         }
         Cmd::Init { ci, instruction, provider, model } => {
             apply_overrides(&mut cfg, provider, model);

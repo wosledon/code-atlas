@@ -1,24 +1,27 @@
 //! Read-only repository tools handed to the LLM while it writes a wiki page.
 //!
-//! Giving the model `read_file` / `list_files` / `grep` lets a page be generated
-//! from a *targeted* slice of the repository instead of pasting the whole scan
-//! into every prompt. Every path is confined to the repository root and filtered
-//! by `privacy.redact_paths` / `privacy.max_file_bytes`.
+//! Tools let a page be generated from a *targeted* slice of the repository
+//! instead of pasting the whole scan into every prompt. Paths stay confined
+//! to the repo root and are filtered by privacy rules.
+
+mod glob;
+mod hunt;
+mod scan;
 
 use anyhow::{anyhow, Result};
 use atlas_llm::ToolSpec;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
-use walkdir::WalkDir;
 
-const DEFAULT_MAX_RESULTS: usize = 40;
+pub use glob::shell_glob_match;
+
+pub const DEFAULT_MAX_RESULTS: usize = 40;
 const MAX_TOOL_RESULTS: usize = 200;
-const MAX_LINE_CHARS: usize = 400;
 
 pub struct RepoTools {
-    root: PathBuf,
-    redact: Vec<String>,
-    max_file_bytes: usize,
+    pub(crate) root: PathBuf,
+    pub(crate) redact: Vec<String>,
+    pub(crate) max_file_bytes: usize,
 }
 
 impl RepoTools {
@@ -46,6 +49,20 @@ impl RepoTools {
                     "properties": {
                         "glob": { "type": "string", "description": "glob filter, e.g. crates/atlas-core/src/**/*.rs" },
                         "limit": { "type": "integer", "description": "max entries to return (default 60)" }
+                    }
+                }),
+            },
+            ToolSpec {
+                name: "list_tree".into(),
+                description: "Indented directory tree under a path (depth-limited). Use for \
+                    architecture / module layout pages instead of dumping every file."
+                    .into(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "repo-relative dir, default \".\"" },
+                        "depth": { "type": "integer", "description": "max depth (default 2, max 4)" },
+                        "limit": { "type": "integer", "description": "max entries (default 80)" }
                     }
                 }),
             },
@@ -79,6 +96,34 @@ impl RepoTools {
                     "required": ["pattern"]
                 }),
             },
+            ToolSpec {
+                name: "find_defs".into(),
+                description: "Find definitions of a symbol across common languages: Rust fn/struct/\
+                    enum/trait/mod, TS/JS function/class/const, Python def/class. Returns path:line \
+                    plus the definition line."
+                    .into(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string", "description": "exact symbol name, e.g. Store or open_store" },
+                        "glob": { "type": "string", "description": "optional glob filter" }
+                    },
+                    "required": ["name"]
+                }),
+            },
+            ToolSpec {
+                name: "git_log".into(),
+                description: "Recent git commits (oneline). Optionally limited to one path — useful \
+                    for runbooks and change history. Empty when the repo is not a git work tree."
+                    .into(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "optional repo-relative path filter" },
+                        "limit": { "type": "integer", "description": "max commits (default 15, max 50)" }
+                    }
+                }),
+            },
         ]
     }
 
@@ -101,6 +146,15 @@ impl RepoTools {
 
         match name {
             "list_files" => self.list_files(glob.as_deref(), limit),
+            "list_tree" => {
+                let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+                let depth = args
+                    .get("depth")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(2)
+                    .clamp(1, 4) as usize;
+                self.list_tree(path, depth, limit)
+            }
             "read_file" => {
                 let path = args
                     .get("path")
@@ -117,137 +171,23 @@ impl RepoTools {
                     .ok_or_else(|| anyhow!("grep requires a \"pattern\" argument"))?;
                 self.grep(pattern, glob.as_deref(), limit)
             }
+            "find_defs" => {
+                let name = args
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow!("find_defs requires a \"name\" argument"))?;
+                self.find_defs(name, glob.as_deref(), limit)
+            }
+            "git_log" => {
+                let path = args.get("path").and_then(|v| v.as_str());
+                self.git_log(path, limit.min(50).max(1))
+            }
             other => Err(anyhow!("unknown tool `{other}`")),
         }
     }
 
-    fn list_files(&self, glob: Option<&str>, limit: usize) -> Result<String> {
-        let mut out: Vec<String> = Vec::new();
-        for entry in WalkDir::new(&self.root)
-            .follow_links(false)
-            .into_iter()
-            .filter_entry(|e| !is_skipped_dir(e.path()))
-            .filter_map(|e| e.ok())
-        {
-            if !entry.file_type().is_file() {
-                continue;
-            }
-            let rel = self.rel(entry.path());
-            if rel.is_empty() || self.is_redacted(&rel) {
-                continue;
-            }
-            if let Some(g) = glob
-                && !shell_glob_match(g, &rel)
-            {
-                continue;
-            }
-            out.push(rel);
-            if out.len() >= limit {
-                break;
-            }
-        }
-        out.sort();
-        if out.is_empty() {
-            return Ok("(no matching files)".into());
-        }
-        Ok(out.join("\n"))
-    }
-
-    fn read_file(&self, path: &str, start: Option<u64>, end: Option<u64>) -> Result<String> {
-        let full = self.resolve(path)?;
-        let meta = std::fs::metadata(&full)?;
-        if meta.len() as usize > self.max_file_bytes {
-            return Err(anyhow!(
-                "file is {} bytes which exceeds the {}-byte limit",
-                meta.len(),
-                self.max_file_bytes
-            ));
-        }
-        let bytes = std::fs::read(&full)?;
-        if bytes.iter().take(1024).any(|b| *b == 0) {
-            return Err(anyhow!("refusing to read binary file `{path}`"));
-        }
-        let text = String::from_utf8_lossy(&bytes);
-        let lines: Vec<&str> = text.lines().collect();
-        let total = lines.len();
-        let from = start.unwrap_or(1).max(1) as usize;
-        let to = end.unwrap_or(total as u64).max(1) as usize;
-        if from > total {
-            return Err(anyhow!("start_line {from} is past the end of `{path}` ({total} lines)"));
-        }
-        let to = to.min(total).max(from);
-        let mut out = format!("// {path} lines {from}-{to} of {total}\n");
-        for (i, line) in lines[from - 1..to].iter().enumerate() {
-            out.push_str(&format!("{:>5}| {}\n", from + i, clip(line)));
-        }
-        Ok(out)
-    }
-
-    fn grep(&self, pattern: &str, glob: Option<&str>, limit: usize) -> Result<String> {
-        let needle = pattern.to_lowercase();
-        if needle.is_empty() {
-            return Err(anyhow!("pattern must not be empty"));
-        }
-        let mut out: Vec<String> = Vec::new();
-        let mut scanned = 0usize;
-        for entry in WalkDir::new(&self.root)
-            .follow_links(false)
-            .into_iter()
-            .filter_entry(|e| !is_skipped_dir(e.path()))
-            .filter_map(|e| e.ok())
-        {
-            if !entry.file_type().is_file() {
-                continue;
-            }
-            let rel = self.rel(entry.path());
-            if rel.is_empty()
-                || self.is_redacted(&rel)
-                || !is_text_extension(&rel)
-                || glob.is_some_and(|g| !shell_glob_match(g, &rel))
-            {
-                continue;
-            }
-            let meta = match std::fs::metadata(entry.path()) {
-                Ok(m) => m,
-                Err(_) => continue,
-            };
-            if meta.len() as usize > self.max_file_bytes {
-                continue;
-            }
-            let bytes = match std::fs::read(entry.path()) {
-                Ok(b) => b,
-                Err(_) => continue,
-            };
-            if bytes.iter().take(1024).any(|b| *b == 0) {
-                continue;
-            }
-            scanned += 1;
-            let text = String::from_utf8_lossy(&bytes);
-            for (i, line) in text.lines().enumerate() {
-                if line.to_lowercase().contains(&needle) {
-                    out.push(format!("{rel}:{}: {}", i + 1, clip(line)));
-                    if out.len() >= limit {
-                        break;
-                    }
-                }
-            }
-            if out.len() >= limit {
-                break;
-            }
-        }
-        if out.is_empty() {
-            return Ok(format!("(no matches for `{pattern}` in {scanned} files)"));
-        }
-        let truncated = out.len() >= limit;
-        let mut body = out.join("\n");
-        if truncated {
-            body.push_str("\n(more matches omitted)");
-        }
-        Ok(body)
-    }
-
     /// Resolve a repo-relative path and guarantee it cannot escape the repo.
-    fn resolve(&self, path: &str) -> Result<PathBuf> {
+    pub(crate) fn resolve(&self, path: &str) -> Result<PathBuf> {
         let trimmed = path.trim().trim_start_matches("./");
         if trimmed.is_empty() {
             return Err(anyhow!("path must not be empty"));
@@ -266,80 +206,14 @@ impl RepoTools {
         Ok(canonical)
     }
 
-    fn rel(&self, path: &Path) -> String {
+    pub(crate) fn rel(&self, path: &Path) -> String {
         path.strip_prefix(&self.root)
             .map(|p| p.to_string_lossy().replace('\\', "/"))
             .unwrap_or_default()
     }
 
-    fn is_redacted(&self, rel: &str) -> bool {
+    pub(crate) fn is_redacted(&self, rel: &str) -> bool {
         self.redact.iter().any(|p| shell_glob_match(p, rel))
-    }
-}
-
-fn is_skipped_dir(path: &Path) -> bool {
-    let name = path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-    path.is_dir()
-        && matches!(
-            name.as_str(),
-            ".git" | "node_modules" | "target" | "dist" | ".venv" | "venv" | "__pycache__" | ".atlas-data"
-        )
-}
-
-fn is_text_extension(rel: &str) -> bool {
-    let ext = rel.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
-    matches!(
-        ext.as_str(),
-        "rs" | "toml" | "json" | "md" | "txt" | "ts" | "tsx" | "js" | "jsx" | "py" | "go" | "java"
-            | "c" | "h" | "cpp" | "hpp" | "cs" | "rb" | "php" | "sh" | "ps1" | "bat" | "yml" | "yaml"
-            | "sql" | "css" | "scss" | "html" | "vue" | "kt" | "swift" | "gradle" | "mod" | "sum"
-            | "cfg" | "ini" | "xml" | "proto" | "mjs" | "cjs" | "lock" | "env" | "gitignore"
-    )
-}
-
-fn clip(line: &str) -> String {
-    let t = line.trim_end();
-    if t.chars().count() <= MAX_LINE_CHARS {
-        return t.to_string();
-    }
-    let mut s: String = t.chars().take(MAX_LINE_CHARS).collect();
-    s.push('…');
-    s
-}
-
-/// Glob matcher with `**` (any depth), `*` (within one segment) and `?`.
-pub fn shell_glob_match(pattern: &str, text: &str) -> bool {
-    let (p, t): (Vec<char>, Vec<char>) = (
-        pattern.replace('\\', "/").chars().collect(),
-        text.replace('\\', "/").chars().collect(),
-    );
-    glob_chars(&p, &t)
-}
-
-fn glob_chars(pat: &[char], txt: &[char]) -> bool {
-    if pat.is_empty() {
-        return txt.is_empty();
-    }
-    match pat[0] {
-        '*' if pat.len() > 1 && pat[1] == '*' => {
-            let rest = &pat[2..];
-            // `**/foo` also matches a top-level `foo`.
-            if rest.first() == Some(&'/') && glob_chars(&rest[1..], txt) {
-                return true;
-            }
-            (0..=txt.len()).any(|i| glob_chars(rest, &txt[i..]))
-        }
-        '*' => (0..=txt.len())
-            .take_while(|i| *i == 0 || txt[i - 1] != '/')
-            .any(|i| glob_chars(&pat[1..], &txt[i..])),
-        '?' => match txt.first() {
-            Some(c) if *c != '/' => glob_chars(&pat[1..], &txt[1..]),
-            _ => false,
-        },
-        c => match txt.first() {
-            Some(t) if *t == c => glob_chars(&pat[1..], &txt[1..]),
-            _ => false,
-        },
     }
 }
 
@@ -380,9 +254,13 @@ mod tests {
 
         let hits = t.call("grep", "{\"pattern\":\"MAIN\",\"glob\":\"**/*.rs\"}").unwrap();
         assert!(hits.contains("src/lib.rs:1"), "got {hits}");
-        // redacted file is never surfaced by grep either
         assert!(t.call("grep", "{\"pattern\":\"SECRET\"}").unwrap().starts_with("(no matches"));
         assert!(t.call("read_file", "not json at all").is_err());
+
+        let defs = t.call("find_defs", "{\"name\":\"main\"}").unwrap();
+        assert!(defs.contains("src/lib.rs"), "got {defs}");
+        let tree = t.call("list_tree", "{\"depth\":2}").unwrap();
+        assert!(tree.contains("src/"), "got {tree}");
 
         std::fs::remove_dir_all(&dir).ok();
     }
