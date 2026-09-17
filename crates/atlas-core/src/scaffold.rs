@@ -57,7 +57,7 @@ pub fn ensure_agents_pointer(repo_root: &Path, atlas_root_rel: &str) -> Result<(
     let block_start = "<!-- ATLAS:START -->";
     let block_end = "<!-- ATLAS:END -->";
     let block = format!(
-        "{block_start}\n## Atlas\n\n生成文档 Wiki 位于 `{atlas_root_rel}/`（入口 `{atlas_root_rel}/quickstart.md`）。\n\n- 检索：`atlas search \"...\"`\n- 更新：`atlas update`\n- 本地 UI：`atlas serve`\n{block_end}\n"
+        "{block_start}\n## Atlas\n\n生成文档 Wiki 位于 `{atlas_root_rel}/`（入口 `{atlas_root_rel}/quickstart.md`）。\n\n- 检索：`atlas search \"...\"`\n- 更新：`atlas update`\n- 本地 UI：`atlas web`\n{block_end}\n"
     );
     if path.exists() {
         let text = std::fs::read_to_string(&path)?;

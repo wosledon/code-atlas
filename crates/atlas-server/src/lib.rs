@@ -89,7 +89,7 @@ pub async fn serve(
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    tracing::info!("atlas serve on http://{addr}/?t={token}");
+    tracing::info!("atlas web on http://{addr}/?t={token}");
     println!("Code Atlas UI: http://{addr}/?t={token}");
     axum::serve(listener, app).await?;
     Ok(())

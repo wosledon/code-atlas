@@ -86,8 +86,9 @@ enum Cmd {
         #[arg(long)]
         instruction: Option<String>,
     },
-    /// Serve local UI + API
-    Serve {
+    /// Start local web UI + API (CLI is the only entry)
+    #[command(visible_alias = "serve")]
+    Web {
         #[arg(long, default_value_t = 4321)]
         port: u16,
         #[arg(long)]
@@ -168,11 +169,15 @@ async fn main() -> Result<()> {
                 println!("  {}\t{}\t{}", p.rel_path, p.page_type, p.description);
             }
         }
-        Cmd::Serve { port, insecure, web_dist } => {
-            let dist = web_dist.or_else(|| {
-                let d = repo_root.join("web/dist");
-                d.exists().then_some(d)
-            });
+        Cmd::Web { port, insecure, web_dist } => {
+            let dist = resolve_web_dist(web_dist.as_deref(), &repo_root);
+            match &dist {
+                Some(d) => tracing::info!("serving UI from {}", d.display()),
+                None => tracing::warn!(
+                    "web/dist not found; falling back to built-in UI. \
+                     Build with `cd web && npm run build`, or pass --web-dist."
+                ),
+            }
             atlas_server::serve(repo_root, cfg, port, insecure, dist).await?;
         }
         Cmd::Export { out } => {
@@ -194,6 +199,29 @@ async fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Locate the SPA build so `atlas web` works without extra setup.
+/// Prefer an explicit `--web-dist`, then the target repo, then paths next to the binary
+/// (covers `cargo build -p atlas-cli` from a source checkout and a simple install layout).
+fn resolve_web_dist(explicit: Option<&std::path::Path>, repo_root: &std::path::Path) -> Option<PathBuf> {
+    if let Some(d) = explicit {
+        return d.join("index.html").exists().then(|| d.to_path_buf());
+    }
+    let mut candidates: Vec<PathBuf> = vec![repo_root.join("web/dist")];
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.extend([
+                dir.join("web/dist"),
+                dir.join("../web/dist"),
+                dir.join("../../web/dist"),
+                dir.join("../../../web/dist"),
+            ]);
+        }
+    }
+    candidates
+        .into_iter()
+        .find(|d| d.join("index.html").exists())
 }
 
 fn apply_overrides(cfg: &mut AtlasConfig, provider: Option<String>, model: Option<String>) {

@@ -98,7 +98,7 @@ export default function HomePage() {
                 borderRadius: 1.5,
               }}
             >
-              atlas init && atlas serve
+              atlas init && atlas web
             </Box>
           </Stack>
         </Card>

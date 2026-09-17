@@ -10,7 +10,7 @@ const SUGGESTIONS = [
   "这个项目架构是怎样的？",
   "SQLite 存了哪些表？",
   "LLM / chunk 怎么配置？",
-  "atlas serve 能做什么？",
+  "atlas web 能做什么？",
 ];
 
 export default function SearchPage() {

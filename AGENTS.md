@@ -5,7 +5,7 @@
 
 - 检索：`atlas search "..."`
 - 更新：`atlas update`
-- 本地 UI：`atlas serve`
+- 本地 UI：`atlas web`
 <!-- ATLAS:END -->
 
 

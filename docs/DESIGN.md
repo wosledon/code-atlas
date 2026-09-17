@@ -221,7 +221,7 @@ strategy = "in-repo"
 - **Grid system:** 阅读页单栏 `720px`；Visualizer 为 MD3 NavigationRail + 流体图谱 + 可选阅读面板。
 - **Motion rules:** ease-out `150–200ms`；尊重 `prefers-reduced-motion`；仅限节点高亮、面板、Snackbar。
 - **Markdown medium:** 页最大可读宽度约 `720px`；front matter 必填 `type`；内部链接优先相对路径。
-- **本地进程形态:** `atlas serve` 在 `127.0.0.1` 提供 REST/JSON + 静态前端；默认 token Cookie，不暴露公网；写路径过单写者锁（见 §K）。
+- **本地进程形态:** `atlas web` 在 `127.0.0.1` 提供 REST/JSON + 静态前端；默认 token Cookie，不暴露公网；写路径过单写者锁（见 §K）。
 
 ## 7. Anti-Patterns
 
@@ -268,7 +268,7 @@ strategy = "in-repo"
 ```
 code-atlas/
 ├── crates/                          # Rust workspace
-│   ├── atlas-cli/                   # CLI：init | update | serve | status | export
+│   ├── atlas-cli/                   # CLI：init | update | web | status | export
 │   ├── atlas-core/                  # 管线编排、页面计划、no-op、幂等
 │   ├── atlas-analyze/               # 源码扫描、语言探测、符号/依赖图
 │   ├── atlas-claims/                # Claims 读写、证据版本与漂移
@@ -421,7 +421,7 @@ flowchart LR
 
 ## F. Visualizer（人类探索 · React + MD3）
 
-- 本地由 **Rust `atlas-server`** 提供服务（默认 `127.0.0.1:4321`），前端为 `web/` 构建产物。
+- 本地由 **Rust `atlas-server`** 提供服务（默认 `127.0.0.1:4321`），前端为 `web/` 构建产物；CLI 入口为 `atlas web`。
 - **Shell：** MD3 NavigationRail（Wiki / 图谱 / 知识库 / 对话 / Runs / Settings）+ TopAppBar。
 - **`/`（Home）：** **入口是项目卡片列表**（`GET /api/projects`：仓库名、语言、provider/model、页数/chunk 数、最近更新时间与状态、`entryPath`、highlights）；**点卡片才进入 Wiki 文档**。空库时给出 `atlas init` 引导，不显示空卡片墙。
 - **Reader：** `/reader?p=<相对路径>` 深链（默认 `entryPath`）；Markdown 阅读 + Claims chip + 「在图谱中定位」；左栏为文档树（**全高、独立滚动**），当前页高亮。`/reader` 走**应用外壳**（`App.tsx` 的 `FULL_HEIGHT_ROUTES`）：`main` 在 md 断点下 `height:100vh; overflow:hidden`，容器与路由根节点逐层 `flexGrow:1; minHeight:0`，目录卡与正文卡各自 `overflow:auto`——**页面本身不滚动**，读正文不会带动目录或整页；窄屏（xs）退回普通文档流，目录卡限高 320px。
@@ -443,7 +443,7 @@ flowchart LR
 | 更新 | 增量 + no-op | 同；先脚本级 gate，再 CI |
 | 模式 | code wiki | **不做** personal brain / 十类 connector |
 | 集成 | coding-agent 生命周期 | 先 CLI + skill 提示词，后 MCP `begin/plan/page/finish` |
-| 可视化 | graph + reader | 保留；产品化为 **React + MD3** 桌面体验（本地 serve） |
+| 可视化 | graph + reader | 保留；产品化为 **React + MD3** 桌面体验（本地 `atlas web`） |
 | 运行时 | Node 深栈（DeepAgents 等） | **Rust + SQLite** 自托管，无 Node 服务端依赖 |
 | 模型接入 | 13+ provider、OpenRouter 全家桶 | MVP：OpenAI 兼容 + Anthropic + host-agent；Ollama 走兼容口 |
 | 页队列 | 深度 durable queue + Claims 全量 | MVP：SQLite 页队列 + 并行 worker；Claims 先 JSON sidecar |
@@ -459,7 +459,7 @@ flowchart LR
 - 不引入 MongoDB/Postgres/图数据库服务器（Neo4j 等）；图谱落在 SQLite 属性表。
 - 不引入第二套 UI kit（如 Ant Design、shadcn）与 MD3 混用。
 - KB 不提供独立「百科编辑器」；知识以源码 + 生成 Wiki 为准。
-- 不支持 `serve` 默认监听公网；不做多租户云 Wiki（MVP）。
+- 不支持 `web` 默认监听公网；不做多租户云 Wiki（MVP）。
 - 默认 in-repo 输出，但 **不强制** Markdown 必须进源码仓（见 K.10 `external-dir` / `db-only`）。
 
 ## I. 知识图谱（Knowledge Graph）
@@ -643,7 +643,7 @@ chunk_entities(chunk_id, entity_key)
 - **锁文件：** 仓库根或 `data/` 下 `atlas.lock`（`fs2`/`fslock` 跨进程排他）。持有者写入 `{pid, run_id, started_at}`。
 - **规则：**
   - `init`/`update`/`reindex` 互斥；拿不到锁则 exit code `75`（TEMPFAIL）并提示占用进程。
-  - `serve` 只读 API 可与「无写锁」并存；**写操作**（触发 update）经同一把锁排队。
+  - `web` 只读 API 可与「无写锁」并存；**写操作**（触发 update）经同一把锁排队。
   - 进程崩溃残留：锁内 PID 已死则可抢占（Windows 下检查句柄/写时间戳心跳 `atlas.lock.heartbeat`，超过 `lock_stale_secs` 默认 120s 视为 stale）。
 - **run 状态机（SQLite `runs`）：** `queued → running → succeeded | failed | no_op | cancelled`；仅 `succeeded/no_op` 刷新 `.last-update.json`。
 - **取消：** SIGINT/Ctrl+C → 尽量完成当前页原子写后标 `cancelled`，不写「半截页」（页写入用 temp + rename）。
@@ -688,9 +688,9 @@ front_matter_tags = "en"  # tags 保持英文稳定键；title/description 跟 l
 ### K.5 本地 API 鉴权
 
 - 默认绑定 `127.0.0.1`；**同机浏览器**访问需短时 **session token**：
-  - `atlas serve` 启动时生成随机 token，打印 `http://127.0.0.1:4321/?t=<token>`，并设 `HttpOnly` Cookie。
+  - `atlas web` 启动时生成随机 token，打印 `http://127.0.0.1:4321/?t=<token>`，并设 `HttpOnly` Cookie。
   - 前端后续 REST 带 Cookie；纯 API 客户端用 `Authorization: Bearer <token>`。
-- `ATLAS_INSECURE_NO_AUTH=1` 仅调试；默认关闭（CLI 有等价的 `atlas serve --insecure`）。
+- `ATLAS_INSECURE_NO_AUTH=1` 仅调试；默认关闭（CLI 有等价的 `atlas web --insecure`）。
 - 不读仓库内 `.env` 注入前端；Settings 页永不回显密钥。
 - **CORS：** 默认同源；对 `localhost` / `127.0.0.1` 任意端口放行（Vite dev server），其他 Origin 一律不下发 `Access-Control-Allow-Origin`。
 - 不开放 `0.0.0.0`（若 `--host 0.0.0.0` 必须强制 token + 警告）。
@@ -780,7 +780,7 @@ atlas plan                 # 预览页面计划，不调用模型
 atlas search "q" [--limit N]   # 检索后端由 kb.search 决定
 atlas status [--last]
 atlas reindex
-atlas serve [--port 4321] [--insecure] [--web-dist <dir>]
+atlas web [--port 4321] [--insecure] [--web-dist <dir>]   # 兼容别名：serve
 atlas export <dir>
 atlas check                # 只读校验：入口页、正文长度、相对链接（退出码非 0 即不通过）
 atlas init-config          # 写 atlas.toml.example
@@ -1013,9 +1013,9 @@ atlas init-config          # 写 atlas.toml.example
   },
   {
     "decision": "单写者文件锁 + runs 状态机；页写入 temp+rename",
-    "reason": "CLI/serve/CI 并发是常态；半截 Markdown 比失败更糟",
+    "reason": "CLI/web/CI 并发是常态；半截 Markdown 比失败更糟",
     "alternatives": ["仅靠 SQLite 事务管文件", "允许多写者乐观合并"],
-    "tradeoff": "serve 写请求要排队；僵尸锁依赖 heartbeat 抢占"
+    "tradeoff": "web 写请求要排队；僵尸锁依赖 heartbeat 抢占"
   },
   {
     "decision": "生成页默认工具所有；用户内容放 INSTRUCTIONS 或 atlas:keep 段",
@@ -1024,7 +1024,7 @@ atlas init-config          # 写 atlas.toml.example
     "tradeoff": "不读保护段的用户习惯会丢改动，需文档与 Runs 警示"
   },
   {
-    "decision": "本地 serve 默认 token Cookie，仅 127.0.0.1",
+    "decision": "本地 web 默认 token Cookie，仅 127.0.0.1",
     "reason": "同机恶意页面/脚本不应白读 KB 与触发烧钱 update",
     "alternatives": ["完全无鉴权", "强制复杂登录"],
     "tradeoff": "CLI 调 API 多一步；分享链接带 t= 需注意泄露"

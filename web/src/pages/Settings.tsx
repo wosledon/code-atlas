@@ -61,7 +61,7 @@ export default function SettingsPage() {
           strategy: cfg.strategy,
         }),
       });
-      setMsg("已写入 atlas.toml（不含密钥）。重启 atlas serve 后新会话生效。");
+      setMsg("已写入 atlas.toml（不含密钥）。重启 atlas web 后新会话生效。");
     } catch (e) {
       setErr(String(e));
     } finally {
@@ -74,7 +74,7 @@ export default function SettingsPage() {
       <Box className="atlas-fade">
         <Typography variant="h4">设置</Typography>
         <Typography color="text.secondary" sx={{ mt: 0.5 }}>
-          服务入口 <code>atlas serve</code> · 密钥只走环境变量
+          服务入口 <code>atlas web</code> · 密钥只走环境变量
         </Typography>
       </Box>
       {err && <Alert severity="error">{err}</Alert>}
