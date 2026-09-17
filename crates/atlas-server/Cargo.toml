@@ -20,3 +20,12 @@ uuid.workspace = true
 chrono.workspace = true
 walkdir.workspace = true
 toml.workspace = true
+rust-embed.workspace = true
+mime_guess.workspace = true
+flate2 = "1"
+
+[build-dependencies]
+flate2 = "1"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(embedded_ui)"] }

@@ -171,12 +171,11 @@ async fn main() -> Result<()> {
         }
         Cmd::Web { port, insecure, web_dist } => {
             let dist = resolve_web_dist(web_dist.as_deref(), &repo_root);
-            match &dist {
-                Some(d) => tracing::info!("serving UI from {}", d.display()),
-                None => tracing::warn!(
-                    "web/dist not found; falling back to built-in UI. \
-                     Build with `cd web && npm run build`, or pass --web-dist."
-                ),
+            if dist.is_none() && !atlas_server::has_embedded_ui() {
+                tracing::warn!(
+                    "web/dist not found and not embedded; using built-in fallback UI. \
+                     Build with `cd web && npm run build` then rebuild, or pass --web-dist."
+                );
             }
             atlas_server::serve(repo_root, cfg, port, insecure, dist).await?;
         }

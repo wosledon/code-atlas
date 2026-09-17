@@ -3,7 +3,7 @@ use atlas_core::AtlasConfig;
 use atlas_store::{SearchHit, Store};
 use axum::extract::{Path as AxPath, Query, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::response::{Html, IntoResponse, Response};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::json;
@@ -22,8 +22,9 @@ mod projects;
 mod runs;
 mod search;
 mod tree;
+mod web_ui;
 
-use crate::assets::{embedded_index, health};
+use crate::assets::health;
 use crate::chat::kb_chat;
 use crate::config::{get_config, post_config};
 use crate::graph::{graph_nodes, list_entities, neighborhood};
@@ -31,6 +32,9 @@ use crate::projects::list_projects;
 use crate::runs::{list_runs, trigger_update};
 use crate::search::kb_search;
 use crate::tree::{doc_tree, list_pages, read_page};
+use crate::web_ui::{fallback_page, pick_ui_source, serve_embedded, UiSource};
+
+pub use crate::web_ui::has_embedded_ui;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -77,14 +81,25 @@ pub async fn serve(
         .layer(cors_layer())
         .with_state(state);
 
-    if let Some(dist) = web_dist.filter(|p| p.exists()) {
-        // SPA: unknown paths fall back to index.html
-        app = app.fallback_service(
-            tower_http::services::ServeDir::new(&dist)
-                .fallback(tower_http::services::ServeFile::new(dist.join("index.html"))),
-        );
-    } else {
-        app = app.fallback(get(embedded_index));
+    match pick_ui_source(web_dist.as_deref()) {
+        UiSource::Disk(dist) => {
+            tracing::info!("UI: disk {}", dist.display());
+            // SPA: unknown paths fall back to index.html
+            app = app.fallback_service(
+                tower_http::services::ServeDir::new(&dist)
+                    .fallback(tower_http::services::ServeFile::new(dist.join("index.html"))),
+            );
+        }
+        UiSource::Embedded => {
+            tracing::info!("UI: embedded in binary (gzip)");
+            app = app.fallback(serve_embedded);
+        }
+        UiSource::Fallback => {
+            tracing::warn!(
+                "UI: built-in fallback page. Build `cd web && npm run build` then rebuild the CLI, or pass --web-dist."
+            );
+            app = app.fallback(get(fallback_page));
+        }
     }
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));

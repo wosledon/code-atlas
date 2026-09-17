@@ -11,9 +11,9 @@ Living wiki · knowledge graph · knowledge base for code repositories.
 ## Quick start
 
 ```bash
-# 1) build CLI + web
-cargo build -p atlas-cli
+# 1) build CLI + web（前端 gzip 后嵌入二进制；改前端后需重新 build CLI）
 cd web && npm install && npm run build && cd ..
+cargo build -p atlas-cli --release
 
 # 2) optional config
 cp atlas.toml.example atlas.toml
@@ -21,22 +21,22 @@ export OPENAI_API_KEY=...          # or ANTHROPIC_API_KEY / Ollama
 export ATLAS_MODEL=...             # optional
 
 # 3) generate wiki + KB
-./target/debug/atlas init
+./target/release/atlas init
 
 # 4) search / web UI
-./target/debug/atlas search "auth"      # 命中含召回正文与行号
-./target/debug/atlas web                # 统一入口：REST API + 前端，打印带 token 的 URL
+./target/release/atlas search "auth"      # 命中含召回正文与行号
+./target/release/atlas web                # 统一入口：REST API + 前端，打印带 token 的 URL
 # 兼容旧名：
-./target/debug/atlas serve
+./target/release/atlas serve
 # 开发期免 token（仅本机调试）：
-./target/debug/atlas web --insecure
+./target/release/atlas web --insecure
 ```
 
 ## Web UI 入口
 
 | 入口 | 说明 |
 |---|---|
-| **`atlas web`** | CLI 统一入口：REST API + 静态前端（`serve` 为兼容别名） |
+| **`atlas web`** | CLI 统一入口：REST API + 静态前端（`serve` 为兼容别名）；前端默认编入二进制，`--web-dist` 可覆盖 |
 | **`http://127.0.0.1:4321/?t=<token>`** | 项目卡片（`/`）：名称、语言、页数/chunk、最近更新与状态，点卡片进入 Wiki |
 | **`http://127.0.0.1:4321/reader?p=<rel_path>`** | Wiki 文档阅读（默认 `quickstart.md`，深链可分享） |
 | **`http://127.0.0.1:4321/chat`** | 知识库对话：回答 + **召回内容**（页路径/行号/片段） |
