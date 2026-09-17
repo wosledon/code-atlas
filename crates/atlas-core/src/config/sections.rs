@@ -71,9 +71,10 @@ fn default_concurrency() -> usize {
 }
 
 fn default_tool_rounds() -> usize {
-    // 3 rounds ≈ read a few files + answer. Higher values multiply wall-clock
-    // time per page (each round is a full LLM round-trip).
-    3
+    // 2 tool rounds (3 model calls/page max): enough to batch a handful of
+    // reads and answer. Round trips are the dominant wall-clock and token cost,
+    // because every round re-sends the whole conversation.
+    2
 }
 
 fn default_depth_pass() -> bool {

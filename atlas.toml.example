@@ -14,7 +14,9 @@ concurrency = 5
 timeout_secs = 180
 retries = 3
 # How many read_file/list_files/grep rounds a page generation may use (0 disables tools).
-max_tool_rounds = 6
+# Each round is a full model call that re-sends the conversation: raising this
+# multiplies both wall-clock time and prompt tokens per page.
+max_tool_rounds = 2
 # Re-check each page against the depth bar and let the model expand it once when it is too thin.
 depth_pass = true
 

@@ -72,13 +72,15 @@ impl LlmClient {
                 ),
                 tool_call_id: None,
             });
-            for call in turn.tool_calls.iter().take(4) {
+            // Three calls per round: every result stays in the history and is
+            // re-sent on each later round, so breadth here is paid for 2×.
+            for call in turn.tool_calls.iter().take(3) {
                 let result = match exec(&call.name, &call.arguments) {
                     Ok(out) => out,
                     Err(e) => format!("ERROR: {e:#}"),
                 };
                 // Keep follow-up rounds cheap: long dumps bloat every later prompt.
-                messages.push(ChatMessage::tool(&truncate(&result, 8_000), &call.id));
+                messages.push(ChatMessage::tool(&truncate(&result, 6_000), &call.id));
             }
         }
         // Unreachable in practice: the final iteration is tool-free.

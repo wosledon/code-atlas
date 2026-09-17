@@ -12,10 +12,11 @@ use super::*;
 use atlas_analyze::file_outline;
 
 /// 每个页面最多展开多少个文件、每个文件最多列多少个声明。
-const MAX_FILES: usize = 22;
-const MAX_ITEMS_PER_FILE: usize = 10;
+/// 这段证据会随每一轮工具调用重复计费，宁可少列、让模型按需 `read_file`。
+const MAX_FILES: usize = 14;
+const MAX_ITEMS_PER_FILE: usize = 8;
 /// 这一段在提示词里的字符上限，避免证据比正文还长。
-const MAX_CHARS: usize = 6500;
+const MAX_CHARS: usize = 4200;
 /// 读取文件时只看前这么多字节（声明都在文件前部）。
 const EXCERPT_BYTES: usize = 60_000;
 

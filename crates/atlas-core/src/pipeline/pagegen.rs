@@ -169,11 +169,12 @@ impl PageGen {
             Ok((usage, body)) => {
                 // Land the first draft before any depth rewrite so the reader
                 // (and the index) see content as soon as the model finishes.
+                // usage=None: the final write reports the accumulated totals.
                 if let Some(writer) = writer {
                     let draft = GeneratedPageWithMeta {
                         page: page.clone(),
                         body: body.clone(),
-                        usage: Some(usage),
+                        usage: None,
                         fingerprint: fingerprint.clone(),
                         outcome: PageOutcome::Generated,
                     };
@@ -304,7 +305,7 @@ async fn generate_page_with_llm(
     tools: &RepoTools,
 ) -> Result<((i64, i64, i64), String)> {
     let (system, user) = generate_messages(cfg, page, evidence);
-    call_model(llm, tools, cfg, &system, &user).await
+    call_model(llm, tools, cfg.llm.max_tool_rounds, &system, &user).await
 }
 
 /// 「扩写」：深度门发现页面太浅时，让模型带着缺口清单重写全文。
@@ -319,7 +320,8 @@ async fn expand_page_with_llm(
     gaps: &[String],
 ) -> Result<((i64, i64, i64), String)> {
     let (system, user) = expand_messages(cfg, page, gaps, draft, evidence);
-    call_model(llm, tools, cfg, &system, &user).await
+    // 只有一轮校验：草稿已带上模型读过的材料，再来一整轮工具往返等于重写一遍整页。
+    call_model(llm, tools, cfg.llm.max_tool_rounds.min(1), &system, &user).await
 }
 
 /// One model call with the repository tools attached (or a plain chat when tools
@@ -327,11 +329,10 @@ async fn expand_page_with_llm(
 async fn call_model(
     llm: &LlmClient,
     tools: &RepoTools,
-    cfg: &AtlasConfig,
+    rounds: usize,
     system: &str,
     user: &str,
 ) -> Result<((i64, i64, i64), String)> {
-    let rounds = cfg.llm.max_tool_rounds;
     if rounds > 0 && llm.supports_tools() {
         let specs = RepoTools::specs();
         match llm

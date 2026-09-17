@@ -32,7 +32,7 @@ pub(crate) fn build_evidence(scan: &RepoScan, page: &PlannedPage) -> String {
     out.push_str(&manifest_summary(scan));
     out.push_str(&commands(scan));
     out.push_str("\n## Modules discovered\n");
-    for (key, label, hint) in detect_code_modules(scan).iter().take(16) {
+    for (key, label, hint) in detect_code_modules(scan).iter().take(12) {
         let files = scan
             .files
             .iter()
@@ -53,7 +53,9 @@ pub(crate) fn build_evidence(scan: &RepoScan, page: &PlannedPage) -> String {
     ));
     let mut listed = 0;
     for f in &relevant {
-        if listed >= 120 {
+        // The list is orientation, not content: the outline below names the
+        // files that matter, and `list_files` has the rest.
+        if listed >= 60 {
             out.push_str("- … (truncated; use list_files/grep for the rest)\n");
             break;
         }
@@ -62,7 +64,7 @@ pub(crate) fn build_evidence(scan: &RepoScan, page: &PlannedPage) -> String {
     }
     out.push_str(&source_outline(scan, page));
     out.push_str("\n## Documents this wiki will contain\n");
-    for p in plan_pages(scan, "plan", None).iter().take(20) {
+    for p in plan_pages(scan, "plan", None).iter().take(12) {
         out.push_str(&format!("- [{}]({}) — {}\n", p.title, p.rel_path, p.description));
     }
     out

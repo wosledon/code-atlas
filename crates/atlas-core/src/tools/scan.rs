@@ -6,6 +6,10 @@ use anyhow::{anyhow, Result};
 use std::path::Path;
 use walkdir::WalkDir;
 
+/// Lines returned by an un-ranged `read_file`; the caller can continue from
+/// there. Sized so a full window still fits in the client-side result budget.
+const READ_WINDOW_LINES: usize = 120;
+
 impl RepoTools {
     pub(crate) fn list_files(&self, glob: Option<&str>, limit: usize) -> Result<String> {
         let mut out: Vec<String> = Vec::new();
@@ -57,12 +61,23 @@ impl RepoTools {
         let lines: Vec<&str> = text.lines().collect();
         let total = lines.len();
         let from = start.unwrap_or(1).max(1) as usize;
-        let to = end.unwrap_or(total as u64).max(1) as usize;
         if from > total {
             return Err(anyhow!("start_line {from} is past the end of `{path}` ({total} lines)"));
         }
-        let to = to.min(total).max(from);
+        // Un-ranged reads return one window and say how much is left: a whole
+        // 2000-line file would be truncated mid-way anyway, and the model can
+        // aim the next read instead of paying for a blind one.
+        let to = match end {
+            Some(e) => (e.max(1) as usize).max(from).min(total),
+            None => (from + READ_WINDOW_LINES - 1).min(total),
+        };
         let mut out = format!("// {path} lines {from}-{to} of {total}\n");
+        if to < total {
+            out.push_str(&format!(
+                "// … not the whole file: continue with start_line={}\n",
+                to + 1
+            ));
+        }
         for (i, line) in lines[from - 1..to].iter().enumerate() {
             out.push_str(&format!("{:>5}| {}\n", from + i, clip(line)));
         }

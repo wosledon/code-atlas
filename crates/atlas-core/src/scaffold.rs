@@ -19,7 +19,8 @@ concurrency = 5
 timeout_secs = 180
 retries = 3
 # How many read_file/list_files/grep rounds a page generation may use (0 disables tools).
-max_tool_rounds = 6
+# 每轮都是一次完整模型调用，会重发整段对话：调大会同时放大耗时与 token。
+max_tool_rounds = 2
 # Re-check each page against the depth bar and let the model expand it once when too thin.
 depth_pass = true
 

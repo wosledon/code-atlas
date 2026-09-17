@@ -68,15 +68,17 @@ impl RepoTools {
             },
             ToolSpec {
                 name: "read_file".into(),
-                description: "Read a UTF-8 text file from the repository. Prefer this over guessing: \
-                    open the real source before describing behaviour. Optionally restrict to a line range."
+                description: "Read a line window of a UTF-8 text file. Prefer this over guessing: \
+                    open the real source before describing behaviour. Without a range it returns \
+                    the first 120 lines and tells you how many there are — pass start_line/end_line \
+                    to continue. Read only the parts you will cite."
                     .into(),
                 parameters: json!({
                     "type": "object",
                     "properties": {
                         "path": { "type": "string", "description": "repository-relative path, e.g. crates/atlas-store/src/lib.rs" },
                         "start_line": { "type": "integer", "description": "1-based first line (default 1)" },
-                        "end_line": { "type": "integer", "description": "1-based last line (default: end of file)" }
+                        "end_line": { "type": "integer", "description": "1-based last line (default: 120 lines from start_line)" }
                     },
                     "required": ["path"]
                 }),
@@ -251,6 +253,17 @@ mod tests {
         assert!(t.call("read_file", "{\"path\":\"src/lib.rs\",\"start_line\":1,\"end_line\":1}")
             .unwrap()
             .contains("1| fn main"));
+
+        // 未指定行范围时只返回一个窗口，并指出后续从哪里续读：
+        // 整文件读取会被客户端截断，模型反而要多花一轮。
+        let long = (1..=300).map(|i| format!("let v{i} = {i};\n")).collect::<String>();
+        std::fs::write(dir.join("src/long.rs"), long).unwrap();
+        let window = t.read_file("src/long.rs", None, None).unwrap();
+        assert!(window.contains("lines 1-120 of 300"), "got {window}");
+        assert!(window.contains("start_line=121"), "got {window}");
+        assert!(!window.contains("v121 ="), "window leaked past its end: {window}");
+        let rest = t.read_file("src/long.rs", Some(121), Some(300)).unwrap();
+        assert!(rest.contains("v121 = 121"), "got {rest}");
 
         let hits = t.call("grep", "{\"pattern\":\"MAIN\",\"glob\":\"**/*.rs\"}").unwrap();
         assert!(hits.contains("src/lib.rs:1"), "got {hits}");

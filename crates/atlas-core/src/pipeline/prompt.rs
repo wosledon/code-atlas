@@ -21,8 +21,9 @@ pub(super) fn generate_messages(
          Output language: {}.\n\n\
          Working method:\n\
          1) The evidence below ends with a source outline listing real files and their declarations \
-         with line numbers. Open the 3–8 most relevant files with read_file (use start_line/end_line) \
-         and grep for the symbols you are about to describe — do this BEFORE writing prose.\n\
+         with line numbers. Read the 3–6 files this page actually needs — batch every read_file / \
+         grep call into ONE round (the calls in a round run together) and use start_line/end_line \
+         so each read stays small — then write. Do this BEFORE writing prose.\n\
          2) Cite what you actually read as `path:line`; never invent files, symbols, routes, tables \
          or config keys.\n\
          3) Then write the page following the required outline exactly.\n\n\
@@ -69,9 +70,11 @@ pub(super) fn expand_messages(
          Rules:\n\
          - Return the full revised markdown body only: no front matter, no diff, no commentary.\n\
          - Keep everything that was already correct, and resolve every listed gap.\n\
-         - Read the real code (read_file / grep / list_files) before adding detail. More depth means \
-         more verified specifics — symbol names with line numbers, data fields, error paths, \
-         invariants, trade-offs, real commands — never padding, repetition or generic advice.\n\
+         - More depth means more verified specifics — symbol names with line numbers, data \
+         fields, error paths, invariants, trade-offs, real commands — never padding, repetition \
+         or generic advice. The draft below is your own previous output, so you already read most \
+         of the code for it: read further only where a gap needs it, in a single round of \
+         read_file / grep calls.\n\
          - Keep the required outline, tables and diagrams; make the diagrams match the real code.\n\n\
          {}",
         cfg.output.language,
