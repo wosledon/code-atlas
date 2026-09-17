@@ -3,7 +3,7 @@ import { Box, Stack, Typography, alpha } from "@mui/material";
 import AutoAwesomeRoundedIcon from "@mui/icons-material/AutoAwesomeRounded";
 import { streamApi } from "../lib/api";
 import { ChatComposer } from "../components/chat/ChatComposer";
-import { ChatMessage, ChatPendingRow } from "../components/chat/ChatMessage";
+import { ChatMessage } from "../components/chat/ChatMessage";
 import type { ChatTurn } from "../components/chat/types";
 
 const SUGGESTIONS = [
@@ -28,30 +28,32 @@ export default function SearchPage() {
     const content = (text ?? input).trim();
     if (!content || busy) return;
     setInput("");
-    const history: ChatTurn[] = [...chat, { role: "user", content }];
-    setChat(history);
     setBusy(true);
 
-    // Placeholder assistant turn that fills as SSE deltas arrive.
-    const assistantIdx = history.length;
-    setChat((c) => [
-      ...c,
-      { role: "assistant", content: "", mode: "llm", sources: [], contexts: [] },
-    ]);
+    const uid = `u-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const aid = `${uid}-a`;
+    const userTurn: ChatTurn = { id: uid, role: "user", content };
+    const asstTurn: ChatTurn = {
+      id: aid,
+      role: "assistant",
+      content: "",
+      mode: "llm",
+      sources: [],
+      contexts: [],
+    };
+
+    // Snapshot the conversation *including* the new user turn for the API body.
+    const history: ChatTurn[] = [...chat, userTurn];
+    setChat([...history, asstTurn]);
 
     const patchAssistant = (patch: Partial<ChatTurn>) => {
-      setChat((c) => {
-        const next = [...c];
-        const cur = next[assistantIdx];
-        if (!cur) return c;
-        next[assistantIdx] = { ...cur, ...patch };
-        return next;
-      });
+      setChat((c) => c.map((t) => (t.id === aid ? { ...t, ...patch } : t)));
     };
 
     try {
       const messages = history.map((m) => ({ role: m.role, content: m.content }));
       let acc = "";
+      let sawDone = false;
       await streamApi(
         "/api/kb/chat",
         {
@@ -70,21 +72,29 @@ export default function SearchPage() {
             acc += ev.text;
             patchAssistant({ content: acc });
           } else if (ev.type === "done") {
+            sawDone = true;
             patchAssistant({
               content: ev.answer || acc || "（空回答）",
               mode: ev.mode || "llm",
               sources: ev.sources || [],
               contexts: ev.contexts || [],
+              error: ev.error,
             });
           }
         }
       );
-      // If the stream ended without a done frame, keep whatever arrived.
-      if (acc) patchAssistant({ content: acc });
+      if (!sawDone) {
+        patchAssistant({
+          content: acc || "连接已结束，但没有收到回答。请检查模型配置后重试。",
+          mode: "retrieval",
+          error: "连接中断：未收到流式完成事件",
+        });
+      }
     } catch (e) {
       patchAssistant({
         content: `请求失败：${String(e)}`,
         mode: "retrieval",
+        error: String(e),
       });
     } finally {
       setBusy(false);
@@ -103,10 +113,6 @@ export default function SearchPage() {
           {chat.map((m, i) => (
             <ChatMessage key={i} turn={m} />
           ))}
-          {busy && chat[chat.length - 1]?.role === "user" && <ChatPendingRow />}
-          {busy && chat[chat.length - 1]?.role === "assistant" && !chat[chat.length - 1]?.content && (
-            <ChatPendingRow />
-          )}
           <div ref={endRef} />
         </Stack>
       )}

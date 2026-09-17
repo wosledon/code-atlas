@@ -129,6 +129,7 @@ export type ChatStreamEvent =
       contexts?: ChatContext[];
       model?: string;
       usage?: ChatUsage;
+      error?: string;
     };
 
 /** POST and consume an SSE stream of `data: {json}` frames. */

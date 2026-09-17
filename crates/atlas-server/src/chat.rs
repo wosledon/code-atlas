@@ -1,12 +1,12 @@
 use super::*;
 use crate::auth::{authorized, deny};
-use crate::common::{open_store};
+use crate::common::open_store;
 use crate::search::search_mode;
 use axum::body::Body;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt;
+use tokio_stream::wrappers::ReceiverStream;
 
 #[derive(serde::Deserialize)]
 pub(crate) struct ChatMessageIn {
@@ -43,7 +43,11 @@ pub(crate) async fn kb_chat(
         .map(|m| m.content.clone())
         .unwrap_or_default();
     if user_msg.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({"error": "empty question"}))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "empty question"})),
+        )
+            .into_response();
     }
 
     let store = match open_store(&state) {
@@ -141,8 +145,7 @@ pub(crate) async fn kb_chat(
              Use ONLY the provided repository/wiki context for factual claims. \
              Cite page paths like `atlas/architecture/overview.md` when used. \
              If context is insufficient, say so briefly.\n\n## Context\n{}",
-            state.cfg.output.language,
-            context
+            state.cfg.output.language, context
         );
         (system, user)
     });
@@ -150,12 +153,14 @@ pub(crate) async fn kb_chat(
     let (tx, rx) = mpsc::channel::<String>(128);
     tokio::spawn(async move {
         let emit = |v: serde_json::Value| format!("data: {}\n\n", v);
+        let sources_meta = sources.clone();
+        let contexts_meta = contexts.clone();
         let _ = tx
             .send(emit(json!({
                 "type": "meta",
                 "mode": if llm.is_some() { "llm" } else { "retrieval" },
-                "sources": sources,
-                "contexts": contexts,
+                "sources": sources_meta,
+                "contexts": contexts_meta,
             })))
             .await;
 
@@ -180,36 +185,44 @@ pub(crate) async fn kb_chat(
             }
         });
 
-        match atlas_llm::with_stream_sink(sink, llm.chat(&system, &user)).await {
+        let result = atlas_llm::with_stream_sink(sink, llm.chat(&system, &user)).await;
+        let frame = match result {
+            Ok(resp) if !resp.text.trim().is_empty() => json!({
+                "type": "done",
+                "mode": "llm",
+                "answer": resp.text,
+                "model": resp.model,
+                "sources": sources,
+                "contexts": contexts,
+                "usage": {
+                    "prompt_tokens": resp.usage.prompt_tokens,
+                    "completion_tokens": resp.usage.completion_tokens,
+                }
+            }),
             Ok(resp) => {
-                let _ = tx
-                    .send(emit(json!({
-                        "type": "done",
-                        "mode": "llm",
-                        "answer": resp.text,
-                        "model": resp.model,
-                        "sources": sources,
-                        "contexts": contexts,
-                        "usage": {
-                            "prompt_tokens": resp.usage.prompt_tokens,
-                            "completion_tokens": resp.usage.completion_tokens,
-                        }
-                    })))
-                    .await;
+                tracing::warn!("kb chat llm returned empty text, falling back to retrieval");
+                json!({
+                    "type": "done",
+                    "mode": "retrieval",
+                    "answer": retrieval_answer,
+                    "sources": sources,
+                    "contexts": contexts,
+                    "model": resp.model,
+                })
             }
             Err(e) => {
                 tracing::warn!("kb chat llm failed, falling back to retrieval: {e:#}");
-                let _ = tx
-                    .send(emit(json!({
-                        "type": "done",
-                        "mode": "retrieval",
-                        "answer": retrieval_answer,
-                        "sources": sources,
-                        "contexts": contexts,
-                    })))
-                    .await;
+                json!({
+                    "type": "done",
+                    "mode": "retrieval",
+                    "answer": retrieval_answer,
+                    "sources": sources,
+                    "contexts": contexts,
+                    "error": format!("{e:#}"),
+                })
             }
-        }
+        };
+        let _ = tx.send(emit(frame)).await;
     });
 
     let stream = ReceiverStream::new(rx).map(|chunk| Ok::<_, std::convert::Infallible>(chunk));
@@ -228,11 +241,13 @@ pub(crate) async fn kb_chat(
 pub(crate) fn format_hits_as_answer(question: &str, hits: &[SearchHit]) -> String {
     let mut md = String::new();
     md.push_str(&format!(
-        "**未连接可用模型**，已改为直接返回知识库检索结果（问题：「{}」）。\n\n",
+        "**已退回知识库检索结果**（未使用模型综合回答；问题：「{}」）。\n\n",
         question
     ));
     if hits.is_empty() {
-        md.push_str("没有命中相关内容。可先运行 `atlas init` / `atlas update`，或换更短的关键词。\n");
+        md.push_str(
+            "没有命中相关内容。可先运行 `atlas init` / `atlas update`，或换更短的关键词。\n",
+        );
         return md;
     }
     md.push_str("### 相关材料\n\n");

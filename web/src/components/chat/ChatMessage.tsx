@@ -51,9 +51,12 @@ export function ChatMessage({ turn: m }: { turn: ChatTurn }) {
           {m.content ? (
             <MarkdownView source={m.content} />
           ) : (
-            <Typography color="text.secondary" sx={{ fontSize: 14 }}>
-              正在生成…
-            </Typography>
+            <Stack direction="row" spacing={1} alignItems="center">
+              <CircularProgress size={14} thickness={5} />
+              <Typography color="text.secondary" sx={{ fontSize: 14 }}>
+                正在检索知识库…
+              </Typography>
+            </Stack>
           )}
           {m.sources && <SourceChips sources={m.sources} />}
           {m.contexts && m.contexts.length > 0 && <RecalledContexts contexts={m.contexts} />}
@@ -64,27 +67,10 @@ export function ChatMessage({ turn: m }: { turn: ChatTurn }) {
             color="text.secondary"
             sx={{ ml: 0.5, display: "block", mt: 0.75 }}
           >
-            检索模式 · 配置模型后可综合回答
+            {m.error ? `检索模式 · 模型调用失败：${m.error}` : "检索模式 · 配置模型后可综合回答"}
           </Typography>
         )}
       </Box>
-    </Stack>
-  );
-}
-
-/** Placeholder row shown while the answer is being retrieved. */
-export function ChatPendingRow() {
-  return (
-    <Stack direction="row" spacing={1.25} alignItems="center">
-      <Avatar sx={{ ...AVATAR_SX, bgcolor: "primary.main" }}>
-        <AutoAwesomeRoundedIcon fontSize="small" />
-      </Avatar>
-      <Stack direction="row" spacing={1} alignItems="center">
-        <CircularProgress size={16} />
-        <Typography variant="body2" color="text.secondary">
-          正在检索知识库…
-        </Typography>
-      </Stack>
     </Stack>
   );
 }
