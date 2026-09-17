@@ -14,6 +14,7 @@ const HIT_RADIUS = 14;
 /** Wire wheel-zoom, node dragging and background panning. Returns the cleanup function. */
 export function attachInteractions(canvas: HTMLCanvasElement, refs: InteractionRefs) {
   const { nodesRef, transformRef, dragRef, onSelect, onHover } = refs;
+  const lastHover = { current: null as string | null };
 
   const toWorld = (clientX: number, clientY: number) => {
     const rect = canvas.getBoundingClientRect();
@@ -57,7 +58,13 @@ export function attachInteractions(canvas: HTMLCanvasElement, refs: InteractionR
   const onMove = (e: MouseEvent) => {
     const { x, y } = toWorld(e.clientX, e.clientY);
     const n = hit(x, y);
-    onHover(n?.id ?? null);
+    const nextHover = n?.id ?? null;
+    // Only notify on change — calling setHover every mousemove restarts the
+    // RAF effect and flickers the whole canvas.
+    if (nextHover !== lastHover.current) {
+      lastHover.current = nextHover;
+      onHover(nextHover);
+    }
     canvas.style.cursor = n ? "pointer" : dragRef.current.panning ? "grabbing" : "grab";
     if (dragRef.current.id) {
       const node = nodesRef.current.find((v) => v.id === dragRef.current.id);

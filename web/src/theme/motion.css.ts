@@ -25,4 +25,20 @@ export const globalMotion = `
 .atlas-stagger > *:nth-child(6) { animation-delay: 0.22s; }
 .atlas-stagger > *:nth-child(7) { animation-delay: 0.26s; }
 .atlas-stagger > *:nth-child(8) { animation-delay: 0.3s; }
+
+/* Soft scrollbars across the app */
+* { scrollbar-width: thin; scrollbar-color: rgba(26, 111, 181, 0.28) transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(26,111,181,0.35), rgba(61,139,110,0.3));
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(26,111,181,0.55), rgba(61,139,110,0.45));
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-corner { background: transparent; }
 `;

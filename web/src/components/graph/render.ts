@@ -9,8 +9,10 @@ export function fitCanvas(
   ctx: CanvasRenderingContext2D
 ) {
   const dpr = window.devicePixelRatio || 1;
-  const w = wrap.clientWidth;
-  const h = Math.max(560, Math.min(720, window.innerHeight - 220));
+  const w = Math.max(320, wrap.clientWidth);
+  // Prefer the flex-filled wrapper height; fall back for the first paint / mobile.
+  const measured = wrap.clientHeight;
+  const h = measured > 80 ? measured : Math.max(480, window.innerHeight - 220);
   canvas.width = w * dpr;
   canvas.height = h * dpr;
   canvas.style.width = `${w}px`;
@@ -26,7 +28,7 @@ export type Scene = {
   hover: string | null;
 };
 
-/** Paint one frame: dark gradient background, links, glowing nodes with labels. */
+/** Paint one frame: soft light background, links, glowing nodes with labels. */
 export function drawScene(
   ctx: CanvasRenderingContext2D,
   canvas: HTMLCanvasElement,
@@ -36,10 +38,9 @@ export function drawScene(
   const w = canvas.clientWidth;
   const h = canvas.clientHeight;
   ctx.clearRect(0, 0, w, h);
-  // background gradient like Obsidian
   const g = ctx.createRadialGradient(w * 0.5, h * 0.45, 20, w * 0.5, h * 0.5, Math.max(w, h) * 0.7);
-  g.addColorStop(0, "#1a1f2e");
-  g.addColorStop(1, "#0d1117");
+  g.addColorStop(0, "#F7F9FC");
+  g.addColorStop(1, "#EEF2F7");
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, w, h);
 
@@ -68,7 +69,7 @@ export function drawScene(
     ctx.beginPath();
     ctx.moveTo(a.x, a.y);
     ctx.lineTo(b.x, b.y);
-    ctx.strokeStyle = active ? "rgba(124,184,245,0.9)" : "rgba(148,163,184,0.18)";
+    ctx.strokeStyle = active ? "rgba(26,111,181,0.75)" : "rgba(122,134,153,0.28)";
     ctx.lineWidth = active ? 1.6 / t.k : 0.8 / t.k;
     ctx.stroke();
   });
@@ -83,7 +84,7 @@ export function drawScene(
     ctx.beginPath();
     ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
     if (dim) {
-      ctx.fillStyle = alpha(c, 0.25);
+      ctx.fillStyle = alpha(c, 0.28);
     } else {
       const grd = ctx.createRadialGradient(n.x - r * 0.3, n.y - r * 0.3, r * 0.1, n.x, n.y, r);
       grd.addColorStop(0, "#fff");
@@ -91,20 +92,20 @@ export function drawScene(
       grd.addColorStop(1, alpha(c, 0.85));
       ctx.fillStyle = grd;
     }
-    ctx.shadowColor = dim ? "transparent" : alpha(c, 0.55);
+    ctx.shadowColor = dim ? "transparent" : alpha(c, 0.45);
     ctx.shadowBlur = isSel || isHov ? 18 : 8;
     ctx.fill();
     ctx.shadowBlur = 0;
     // ring
     ctx.beginPath();
     ctx.arc(n.x, n.y, r + 1.5, 0, Math.PI * 2);
-    ctx.strokeStyle = isSel ? "#fff" : alpha(c, 0.5);
+    ctx.strokeStyle = isSel ? "#1A6FB5" : alpha(c, 0.55);
     ctx.lineWidth = isSel ? 1.5 / t.k : 0.6 / t.k;
     ctx.stroke();
     // label
     if (t.k > 0.55 && (!selectedId || related.has(n.id) || isHov)) {
       ctx.font = `${11 / Math.min(t.k, 1.2)}px "IBM Plex Sans", "Segoe UI", sans-serif`;
-      ctx.fillStyle = dim ? "rgba(226,232,240,0.25)" : "rgba(226,232,240,0.92)";
+      ctx.fillStyle = dim ? "rgba(74,85,99,0.35)" : "rgba(26,32,44,0.9)";
       ctx.textAlign = "center";
       ctx.fillText(n.name.length > 18 ? n.name.slice(0, 17) + "…" : n.name, n.x, n.y + r + 12);
     }

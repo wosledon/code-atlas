@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { Box, Card, Stack, Typography } from "@mui/material";
+import { Box, Stack, Typography } from "@mui/material";
 import { api, GraphData } from "../lib/api";
 import { GraphLegend } from "../components/graph/GraphLegend";
 import { KindFilter } from "../components/graph/KindFilter";
 import { useForceGraph } from "../components/graph/useForceGraph";
 
-/** Obsidian-like force graph: zoom/pan/drag, dark canvas, soft links. */
+/** Force graph: zoom/pan/drag, light canvas, soft links. Fills the app shell. */
 export default function GraphPage() {
   const [data, setData] = useState<GraphData | null>(null);
   const [kindFilter, setKindFilter] = useState("all");
@@ -26,28 +26,56 @@ export default function GraphPage() {
   const { canvasRef, wrapRef, stats } = useForceGraph(data, kindFilter);
 
   return (
-    <Stack spacing={2}>
+    <Box
+      sx={{
+        height: { md: "100%" },
+        minHeight: 0,
+        flexGrow: { md: 1 },
+        display: "flex",
+        flexDirection: "column",
+      }}
+    >
       <Stack
         direction={{ xs: "column", sm: "row" }}
         justifyContent="space-between"
         alignItems={{ sm: "center" }}
-        spacing={2}
+        spacing={1.5}
+        sx={{
+          flexShrink: 0,
+          px: { xs: 2, md: 3 },
+          pt: 0.75,
+          pb: 1.25,
+          borderBottom: 1,
+          borderColor: "divider",
+          bgcolor: "rgba(255,255,255,0.55)",
+          backdropFilter: "blur(8px)",
+        }}
       >
-        <div>
-          <Typography variant="h4">知识图谱</Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-            Obsidian 风格 · 拖拽节点 / 滚轮缩放 / 拖空白平移 · {stats.n} 节点 · {stats.e} 边
+        <Stack direction="row" alignItems="baseline" spacing={1.5} flexWrap="wrap">
+          <Typography variant="h5" sx={{ fontWeight: 700 }}>
+            知识图谱
           </Typography>
-        </div>
+          <Typography variant="body2" color="text.secondary">
+            拖拽 / 缩放 / 平移 · {stats.n} 节点 · {stats.e} 边
+          </Typography>
+        </Stack>
         <KindFilter kinds={kinds} value={kindFilter} onChange={setKindFilter} />
       </Stack>
 
-      <Card sx={{ overflow: "hidden", bgcolor: "#0d1117", borderColor: "#1f2937" }}>
-        <Box ref={wrapRef} sx={{ position: "relative", width: "100%" }}>
-          <canvas ref={canvasRef} style={{ display: "block", width: "100%", cursor: "grab" }} />
-          <GraphLegend kinds={kinds} kindFilter={kindFilter} />
-        </Box>
-      </Card>
-    </Stack>
+      <Box
+        ref={wrapRef}
+        sx={{
+          position: "relative",
+          flexGrow: 1,
+          minHeight: { xs: 480, md: 0 },
+          width: "100%",
+          bgcolor: "#F0F3F8",
+          overflow: "hidden",
+        }}
+      >
+        <canvas ref={canvasRef} style={{ display: "block", width: "100%", cursor: "grab" }} />
+        <GraphLegend kinds={kinds} kindFilter={kindFilter} />
+      </Box>
+    </Box>
   );
 }

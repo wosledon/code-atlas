@@ -1,17 +1,51 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import mermaid from "mermaid";
-import {
-  cleanupMermaidArtifacts,
-  mermaidErrorBrief,
-  repairMermaid,
-} from "../lib/mermaid";
+import { MermaidBlock } from "./MermaidBlock";
 
 mermaid.initialize({
   startOnLoad: false,
-  theme: "neutral",
+  theme: "base",
   securityLevel: "strict",
   htmlLabels: false,
   fontFamily: "IBM Plex Sans, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif",
+  themeVariables: {
+    primaryColor: "#EAF3FB",
+    primaryTextColor: "#141A22",
+    primaryBorderColor: "#1A6FB5",
+    secondaryColor: "#EEF6F3",
+    secondaryTextColor: "#141A22",
+    secondaryBorderColor: "#3D8B6E",
+    tertiaryColor: "#F7F8FA",
+    tertiaryTextColor: "#4A5563",
+    tertiaryBorderColor: "#C9D1DB",
+    lineColor: "#7A8699",
+    textColor: "#141A22",
+    mainBkg: "#EAF3FB",
+    nodeBorder: "#1A6FB5",
+    clusterBkg: "#F7F8FA",
+    clusterBorder: "#D5DCE6",
+    edgeLabelBackground: "#FFFFFF",
+    fontSize: "13px",
+  },
+  flowchart: {
+    curve: "basis",
+    padding: 12,
+    nodeSpacing: 40,
+    rankSpacing: 48,
+    useMaxWidth: true,
+  },
+  sequence: {
+    useMaxWidth: true,
+    actorMargin: 50,
+    messageMargin: 40,
+    mirrorActors: false,
+    bottomMarginAdj: 1,
+  },
+  gantt: {
+    useMaxWidth: true,
+    barHeight: 22,
+    fontSize: 12,
+  },
 });
 
 export function MarkdownView({ source }: { source: string }) {
@@ -31,7 +65,7 @@ const mdCss = `
 .md-view tr:nth-child(even) td { background: #FAFBFD; }
 .md-view code { background: #EEF1F5; padding: 1px 5px; border-radius: 4px; font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 0.92em; }
 .md-view a { color: #1A6FB5; }
-.md-view h1, .md-view h2, .md-view h3, .md-view h4 { font-weight: 700; letter-spacing: -0.01em; }
+.md-view h1, .md-view h2, .md-view h3, .md-view h4 { font-weight: 700; letter-spacing: -0.01em; scroll-margin-top: 16px; }
 .md-view h1 { font-size: 28px; margin: 8px 0 12px; }
 .md-view h2 { font-size: 21px; margin: 22px 0 10px; padding-bottom: 6px; border-bottom: 1px solid #EEF1F5; }
 .md-view h3 { font-size: 17px; margin: 18px 0 8px; }
@@ -41,11 +75,53 @@ const mdCss = `
 .md-view hr { border: none; border-top: 1px solid #E4E9F0; margin: 20px 0; }
 `;
 
+export function headingId(text: string, level: number, index: number): string {
+  const slug = text
+    .toLowerCase()
+    .replace(/[^\w一-鿿]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+  return `h-${level}-${index}-${slug || "sec"}`;
+}
+
+/** Flatten markdown headings (skips fenced code) for the outline rail. */
+export function extractHeadings(md: string): { level: number; text: string; id: string }[] {
+  const lines = md.replace(/\r\n/g, "\n").split("\n");
+  let inFence = false;
+  let idx = 0;
+  let skippedFm = false;
+  const out: { level: number; text: string; id: string }[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (i === 0 && line.trim() === "---") {
+      // front matter
+      let j = 1;
+      while (j < lines.length && lines[j].trim() !== "---") j++;
+      i = j;
+      skippedFm = true;
+      continue;
+    }
+    if (line.trimStart().startsWith("```")) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    const h = /^(#{1,4})\s+(.*)$/.exec(line);
+    if (!h) continue;
+    const level = h[1].length;
+    const text = h[2].trim();
+    out.push({ level, text, id: headingId(text, level, idx++) });
+  }
+  void skippedFm;
+  return out;
+}
+
 function parseBlocks(md: string): ReactNode[] {
   const lines = md.replace(/\r\n/g, "\n").split("\n");
   const out: ReactNode[] = [];
   let i = 0;
   let key = 0;
+  let headingIdx = 0;
 
   if (lines[0]?.trim() === "---") {
     i = 1;
@@ -137,7 +213,11 @@ function parseBlocks(md: string): ReactNode[] {
       const level = h[1].length;
       const text = h[2].trim();
       const Tag = (`h${Math.min(4, level)}` as unknown) as "h1" | "h2" | "h3" | "h4";
-      out.push(<Tag key={key++}>{renderInline(text)}</Tag>);
+      out.push(
+        <Tag key={key++} id={headingId(text, Math.min(4, level), headingIdx++)}>
+          {renderInline(text)}
+        </Tag>
+      );
       i++;
       continue;
     }
@@ -236,101 +316,4 @@ function renderInline(text: string): ReactNode[] {
   }
   if (last < text.length) parts.push(text.slice(last));
   return parts;
-}
-
-function MermaidBlock({ code }: { code: string }) {
-  const [svg, setSvg] = useState<string>("");
-  const [err, setErr] = useState<string | null>(null);
-  const [repaired, setRepaired] = useState(false);
-  const id = useMemo(() => `mmd-${Math.random().toString(36).slice(2, 9)}`, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    const show = (markup: string, wasRepaired: boolean) => {
-      if (cancelled) return;
-      setSvg(markup);
-      setErr(null);
-      setRepaired(wasRepaired);
-    };
-    (async () => {
-      let failure: unknown;
-      try {
-        show((await mermaid.render(id, code)).svg, false);
-        return;
-      } catch (e) {
-        failure = e;
-      }
-      // Authored source failed: retry once with quoted labels / renamed ids.
-      const fix = repairMermaid(code);
-      if (fix.edits > 0) {
-        try {
-          show((await mermaid.render(`${id}r`, fix.code)).svg, true);
-          cleanupMermaidArtifacts(id);
-          return;
-        } catch {
-          cleanupMermaidArtifacts(`${id}r`);
-        }
-      }
-      cleanupMermaidArtifacts(id);
-      if (cancelled) return;
-      setSvg("");
-      setRepaired(false);
-      setErr(mermaidErrorBrief(failure));
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [code, id]);
-
-  if (err) {
-    return (
-      <div
-        style={{
-          background: "#FFF7F7",
-          border: "1px solid #F0C4C4",
-          borderRadius: 10,
-          padding: "10px 12px",
-          margin: "14px 0 20px",
-        }}
-      >
-        <div style={{ fontSize: 12, color: "#B3261E", marginBottom: 8 }}>
-          Mermaid 解析失败：{err}
-        </div>
-        <pre
-          style={{
-            margin: 0,
-            fontSize: 12,
-            overflow: "auto",
-            color: "#5B6470",
-            fontFamily: '"IBM Plex Mono", ui-monospace, monospace',
-          }}
-        >
-          {code}
-        </pre>
-      </div>
-    );
-  }
-
-  return (
-    <div style={{ margin: "14px 0 20px" }}>
-      <div
-        style={{
-          padding: 16,
-          borderRadius: 14,
-          background: "#FBFCFE",
-          border: "1px solid #E4E9F0",
-          overflow: "auto",
-          display: "flex",
-          justifyContent: "center",
-          minHeight: 32,
-        }}
-        dangerouslySetInnerHTML={{ __html: svg }}
-      />
-      {repaired && (
-        <div style={{ fontSize: 11, color: "#8A94A6", marginTop: 6 }}>
-          已自动修正该图的 mermaid 语法（原文有未加引号的标签或保留字节点 id）
-        </div>
-      )}
-    </div>
-  );
 }

@@ -24,10 +24,11 @@ export function GraphLegend({ kinds, kindFilter }: { kinds: string[]; kindFilter
             size="small"
             label={k}
             sx={{
-              bgcolor: "rgba(15,23,42,0.75)",
+              bgcolor: "rgba(255,255,255,0.88)",
               color: colorOf(k),
-              border: `1px solid ${alpha(colorOf(k), 0.4)}`,
+              border: `1px solid ${alpha(colorOf(k), 0.35)}`,
               fontWeight: 600,
+              boxShadow: "0 2px 8px rgba(16,24,40,0.08)",
             }}
           />
         ))}

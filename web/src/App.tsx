@@ -41,7 +41,9 @@ const nav = [
 
 // Routes that manage their own scrolling: they get an app-shell layout where the
 // page itself never scrolls, so inner panes (tree, document) scroll independently.
-const FULL_HEIGHT_ROUTES = ["/reader"];
+// They also skip the centered max-width container so the canvas/tree can use the
+// full remaining width.
+const FULL_HEIGHT_ROUTES = ["/reader", "/graph"];
 
 export default function App() {
   const [health, setHealth] = useState<{ model?: string; provider?: string } | null>(null);
@@ -156,9 +158,9 @@ export default function App() {
         sx={{
           flexGrow: 1,
           minWidth: 0,
-          pt: appShell ? { xs: 11, md: 9.5 } : 11,
-          px: { xs: 2, md: 4 },
-          pb: appShell ? { xs: 6, md: 3 } : 6,
+          pt: appShell ? 8 : 11,
+          px: appShell ? 0 : { xs: 2, md: 4 },
+          pb: appShell ? 0 : 6,
           position: "relative",
           zIndex: 1,
           ...(appShell
@@ -171,36 +173,42 @@ export default function App() {
             : {}),
         }}
       >
-        <Container
-          maxWidth="lg"
-          sx={
-            appShell
-              ? {
-                  height: { md: "100%" },
-                  display: "flex",
-                  flexDirection: "column",
-                  minHeight: 0,
-                  flexGrow: { md: 1 },
-                }
-              : undefined
-          }
-        >
+        {appShell ? (
           <div
             className="atlas-fade"
-            style={appShell ? { height: "100%", display: "flex", flexDirection: "column", minHeight: 0, flexGrow: 1 } : undefined}
+            style={{
+              height: "100%",
+              display: "flex",
+              flexDirection: "column",
+              minHeight: 0,
+              flexGrow: 1,
+              width: "100%",
+            }}
           >
-            <Routes>
-              <Route path="/" element={<HomePage />} />
-              <Route path="/chat" element={<SearchPage />} />
-              <Route path="/graph" element={<GraphPage />} />
-              <Route path="/reader" element={<ReaderPage />} />
-              <Route path="/runs" element={<RunsPage />} />
-              <Route path="/settings" element={<SettingsPage />} />
-              <Route path="*" element={<HomePage />} />
-            </Routes>
+            <AppRoutes />
           </div>
-        </Container>
+        ) : (
+          <Container maxWidth="lg">
+            <div className="atlas-fade">
+              <AppRoutes />
+            </div>
+          </Container>
+        )}
       </Box>
     </Box>
+  );
+}
+
+function AppRoutes() {
+  return (
+    <Routes>
+      <Route path="/" element={<HomePage />} />
+      <Route path="/chat" element={<SearchPage />} />
+      <Route path="/graph" element={<GraphPage />} />
+      <Route path="/reader" element={<ReaderPage />} />
+      <Route path="/runs" element={<RunsPage />} />
+      <Route path="/settings" element={<SettingsPage />} />
+      <Route path="*" element={<HomePage />} />
+    </Routes>
   );
 }

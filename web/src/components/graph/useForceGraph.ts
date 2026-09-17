@@ -7,8 +7,8 @@ import type { DragState, SimEdge, SimNode, ViewTransform } from "./types";
 
 /**
  * Owns the canvas graph: simulation state lives in refs (mutated 60×/s by the
- * animation loop), while selection/hover/statistics are React state so the page
- * re-renders when they change.
+ * animation loop). Selection/hover are mirrored into refs for painting so a
+ * hover change does not restart the RAF loop (which caused flicker).
  */
 export function useForceGraph(data: GraphData | null, kindFilter: string) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -18,6 +18,8 @@ export function useForceGraph(data: GraphData | null, kindFilter: string) {
   const transformRef = useRef<ViewTransform>({ k: 1, x: 0, y: 0 });
   const dragRef = useRef<DragState>({ id: null, panning: false, lx: 0, ly: 0 });
   const rafRef = useRef(0);
+  const selectedRef = useRef<string | null>(null);
+  const hoverRef = useRef<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [hover, setHover] = useState<string | null>(null);
   const [stats, setStats] = useState({ n: 0, e: 0 });
@@ -29,11 +31,10 @@ export function useForceGraph(data: GraphData | null, kindFilter: string) {
     nodesRef.current = nodes;
     edgesRef.current = edges;
     setStats({ n: nodes.length, e: edges.length });
-    // center transform
     transformRef.current = { k: 1, x: 0, y: 0 };
   }, [data, kindFilter]);
 
-  // force simulation + render loop
+  // force simulation + render loop (stable — does not depend on hover/selected)
   useEffect(() => {
     const canvas = canvasRef.current;
     const wrap = wrapRef.current;
@@ -44,6 +45,8 @@ export function useForceGraph(data: GraphData | null, kindFilter: string) {
     const resize = () => fitCanvas(canvas, wrap, ctx);
     resize();
     window.addEventListener("resize", resize);
+    const ro = new ResizeObserver(resize);
+    ro.observe(wrap);
 
     const tick = () => {
       const nodes = nodesRef.current;
@@ -53,8 +56,8 @@ export function useForceGraph(data: GraphData | null, kindFilter: string) {
         nodes,
         edges,
         transform: transformRef.current,
-        selected,
-        hover,
+        selected: selectedRef.current,
+        hover: hoverRef.current,
       });
       rafRef.current = requestAnimationFrame(tick);
     };
@@ -63,8 +66,9 @@ export function useForceGraph(data: GraphData | null, kindFilter: string) {
     return () => {
       cancelAnimationFrame(rafRef.current);
       window.removeEventListener("resize", resize);
+      ro.disconnect();
     };
-  }, [selected, hover]);
+  }, []);
 
   // interactions
   useEffect(() => {
@@ -74,8 +78,14 @@ export function useForceGraph(data: GraphData | null, kindFilter: string) {
       nodesRef,
       transformRef,
       dragRef,
-      onSelect: setSelected,
-      onHover: setHover,
+      onSelect: (id) => {
+        selectedRef.current = id;
+        setSelected(id);
+      },
+      onHover: (id) => {
+        hoverRef.current = id;
+        setHover(id);
+      },
     });
   }, []);
 
