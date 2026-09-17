@@ -71,7 +71,9 @@ fn default_concurrency() -> usize {
 }
 
 fn default_tool_rounds() -> usize {
-    6
+    // 3 rounds ≈ read a few files + answer. Higher values multiply wall-clock
+    // time per page (each round is a full LLM round-trip).
+    3
 }
 
 fn default_depth_pass() -> bool {

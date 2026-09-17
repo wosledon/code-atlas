@@ -96,7 +96,7 @@ pub(super) async fn generate_pages(
                 .expect("page semaphore is never closed");
             let n = idx + 1;
             let pb = progress.page(n, &job.page.rel_path);
-            let produced = generator.run(n, job, &pb).await;
+            let produced = generator.run(n, job, &pb, Some(&writer), &run_id).await;
             writer.write(&llm, &run_id, n, produced).await
         });
     }

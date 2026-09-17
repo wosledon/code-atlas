@@ -21,20 +21,13 @@ pub(crate) fn build_evidence(scan: &RepoScan, page: &PlannedPage) -> String {
             scan.languages.join(", ")
         }
     ));
+    // Keep shared prose short: long README/DESIGN dumps are repeated on every
+    // page and dominate prompt tokens. The model can open the real files with
+    // `read_file` when a section needs them.
     if let Some(readme) = &scan.readme_excerpt {
         out.push_str("\n## README excerpt\n");
-        out.push_str(&readme.chars().take(2500).collect::<String>());
+        out.push_str(&readme.chars().take(900).collect::<String>());
         out.push('\n');
-    }
-    for design in ["docs/DESIGN.md", "ARCHITECTURE.md", "docs/ARCHITECTURE.md"] {
-        let p = scan.root.join(design);
-        if p.exists() {
-            if let Ok(text) = std::fs::read_to_string(&p) {
-                out.push_str(&format!("\n## {design} (first 6000 chars)\n"));
-                out.push_str(&text.chars().take(6000).collect::<String>());
-                out.push('\n');
-            }
-        }
     }
     out.push_str(&manifest_summary(scan));
     out.push_str(&commands(scan));
@@ -60,7 +53,7 @@ pub(crate) fn build_evidence(scan: &RepoScan, page: &PlannedPage) -> String {
     ));
     let mut listed = 0;
     for f in &relevant {
-        if listed >= 200 {
+        if listed >= 120 {
             out.push_str("- … (truncated; use list_files/grep for the rest)\n");
             break;
         }
@@ -69,7 +62,7 @@ pub(crate) fn build_evidence(scan: &RepoScan, page: &PlannedPage) -> String {
     }
     out.push_str(&source_outline(scan, page));
     out.push_str("\n## Documents this wiki will contain\n");
-    for p in plan_pages(scan, "plan", None).iter().take(30) {
+    for p in plan_pages(scan, "plan", None).iter().take(20) {
         out.push_str(&format!("- [{}]({}) — {}\n", p.title, p.rel_path, p.description));
     }
     out

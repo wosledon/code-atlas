@@ -93,10 +93,11 @@ pub(super) fn expand_messages(
     (system, user)
 }
 
-/// Salt mixed into `page_fingerprint` by the caller: the prompt text, the
-/// generation knobs and the model all describe *how* a page was produced, so a
-/// tweak to any of them must invalidate the reused bodies instead of silently
-/// keeping pages written by the old prompt.
+/// Salt mixed into `page_fingerprint` by the caller: the prompt text and the
+/// model describe *how* a page was produced, so a tweak to either must
+/// invalidate reused bodies. Knobs that only affect *how much* is generated
+/// (`depth_pass`, `max_output_tokens`) stay out of the salt — flipping them
+/// must not force a full re-generation of every page.
 pub(super) fn prompt_salt(
     cfg: &AtlasConfig,
     page: &PlannedPage,
@@ -106,8 +107,8 @@ pub(super) fn prompt_salt(
     let (system, _) = generate_messages(cfg, page, "");
     let (expand, _) = expand_messages(cfg, page, &[], "", "");
     format!(
-        "{system}\u{1f}{expand}\u{1f}depth_pass={}\u{1f}max_output_tokens={}\u{1f}model={provider}/{model}",
-        cfg.llm.depth_pass, cfg.llm.max_output_tokens
+        "{system}\u{1f}{expand}\u{1f}model={provider}/{model}\u{1f}lang={}",
+        cfg.output.language
     )
 }
 
@@ -152,21 +153,22 @@ mod tests {
     }
 
     #[test]
-    fn prompt_salt_tracks_every_generation_input() {
+    fn prompt_salt_tracks_prompt_and_model_not_volume_knobs() {
         let cfg = AtlasConfig::default();
         let arch = page("Architecture");
         let base = prompt_salt(&cfg, &arch, "openai-compatible", "m1");
-        // 同一输入必须稳定（指纹要可复用），任一生成输入变了都必须失效
+        // 同一输入必须稳定（指纹要可复用），生成方式变了必须失效
         assert_eq!(base, prompt_salt(&cfg, &arch, "openai-compatible", "m1"));
         assert_ne!(base, prompt_salt(&cfg, &arch, "openai-compatible", "m2"));
 
-        let mut other_model = cfg.clone();
-        other_model.llm.max_output_tokens += 1;
-        assert_ne!(base, prompt_salt(&other_model, &arch, "openai-compatible", "m1"));
+        // 产量旋钮不进 salt：调 token 上限 / 关深度门不应全量重生成
+        let mut more_tokens = cfg.clone();
+        more_tokens.llm.max_output_tokens += 1;
+        assert_eq!(base, prompt_salt(&more_tokens, &arch, "openai-compatible", "m1"));
 
         let mut no_depth = cfg.clone();
         no_depth.llm.depth_pass = false;
-        assert_ne!(base, prompt_salt(&no_depth, &arch, "openai-compatible", "m1"));
+        assert_eq!(base, prompt_salt(&no_depth, &arch, "openai-compatible", "m1"));
 
         let mut english = cfg.clone();
         english.output.language = "en".into();

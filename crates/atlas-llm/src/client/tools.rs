@@ -72,12 +72,13 @@ impl LlmClient {
                 ),
                 tool_call_id: None,
             });
-            for call in &turn.tool_calls {
+            for call in turn.tool_calls.iter().take(4) {
                 let result = match exec(&call.name, &call.arguments) {
                     Ok(out) => out,
                     Err(e) => format!("ERROR: {e:#}"),
                 };
-                messages.push(ChatMessage::tool(&truncate(&result, 20_000), &call.id));
+                // Keep follow-up rounds cheap: long dumps bloat every later prompt.
+                messages.push(ChatMessage::tool(&truncate(&result, 8_000), &call.id));
             }
         }
         // Unreachable in practice: the final iteration is tool-free.

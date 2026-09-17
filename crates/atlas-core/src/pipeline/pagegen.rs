@@ -9,6 +9,7 @@ use super::progress::PageBar;
 use super::prompt::{expand_messages, generate_messages};
 use super::template::template_page_body;
 use super::types::{GeneratedPageWithMeta, PageJob, PageOutcome};
+use super::write::PageWriter;
 use super::*;
 
 use std::sync::Arc;
@@ -87,7 +88,18 @@ impl PageGen {
 
     /// Produce the body of one page and report progress on `pb` (`n` is its
     /// 1-based position in the plan).
-    pub(super) async fn run(&self, n: usize, job: PageJob, pb: &PageBar) -> GeneratedPageWithMeta {
+    ///
+    /// When `writer` is set, the **first draft is flushed to disk immediately**
+    /// (and again after an optional depth rewrite), so a long page never blocks
+    /// the wiki from showing content the model already produced.
+    pub(super) async fn run(
+        &self,
+        n: usize,
+        job: PageJob,
+        pb: &PageBar,
+        writer: Option<&PageWriter>,
+        run_id: &str,
+    ) -> GeneratedPageWithMeta {
         let PageJob {
             page,
             evidence,
@@ -155,6 +167,20 @@ impl PageGen {
                 self.templated(page, fingerprint, Some(usage))
             }
             Ok((usage, body)) => {
+                // Land the first draft before any depth rewrite so the reader
+                // (and the index) see content as soon as the model finishes.
+                if let Some(writer) = writer {
+                    let draft = GeneratedPageWithMeta {
+                        page: page.clone(),
+                        body: body.clone(),
+                        usage: Some(usage),
+                        fingerprint: fingerprint.clone(),
+                        outcome: PageOutcome::Generated,
+                    };
+                    if let Err(e) = writer.write(&self.llm, run_id, n, draft).await {
+                        tracing::warn!("[{n}/{total}] {} 首稿落盘失败: {e:#}", page.rel_path);
+                    }
+                }
                 let (body, usage, expanded) = if self.cfg.llm.depth_pass {
                     deepen_page(
                         &self.llm,

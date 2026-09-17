@@ -73,6 +73,31 @@ impl LlmClient {
         tools: &[ToolSpec],
         elapsed: Duration,
     ) -> std::result::Result<LlmTurn, Attempt> {
+        // Prefer SSE. Some OpenAI-compatible gateways reject `stream: true`
+        // outright (400) — retry once without streaming so a chat call still
+        // returns a complete answer instead of failing the whole turn.
+        match self.post_chat_attempt(messages, tools, elapsed, true).await {
+            Ok(turn) => Ok(turn),
+            Err(Attempt::Fatal(e)) => {
+                let msg = e.to_string();
+                if msg.contains("llm http 400") || msg.contains("llm http 404") {
+                    tracing::warn!("gateway rejected stream:true, retrying without stream");
+                    self.post_chat_attempt(messages, tools, elapsed, false).await
+                } else {
+                    Err(Attempt::Fatal(e))
+                }
+            }
+            Err(other) => Err(other),
+        }
+    }
+
+    async fn post_chat_attempt(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[ToolSpec],
+        elapsed: Duration,
+        stream: bool,
+    ) -> std::result::Result<LlmTurn, Attempt> {
         let payloads: Vec<ToolPayload<'_>> = tools
             .iter()
             .map(|t| ToolPayload {
@@ -90,19 +115,24 @@ impl LlmClient {
             temperature: self.cfg.temperature,
             max_tokens: self.cfg.max_output_tokens,
             tools: payloads,
-            stream: true,
+            stream,
         };
         let url = format!("{}/chat/completions", self.resolve_base_url());
         let key = self
             .api_key
             .clone()
             .unwrap_or_else(|| "ollama".to_string());
-        let resp = self
+        let mut req = self
             .http
             .post(&url)
             .bearer_auth(key)
-            .header("accept", "text/event-stream")
-            .json(&body)
+            .header("accept", if stream { "text/event-stream, application/json" } else { "application/json" })
+            .json(&body);
+        if !stream {
+            // some gateways treat Accept: event-stream as mandatory stream
+            req = req.header("accept", "application/json");
+        }
+        let resp = req
             .send()
             .await
             .map_err(|e| Attempt::Transient(anyhow!("llm transport error @ {url}: {e}")))?;
@@ -115,8 +145,6 @@ impl LlmClient {
             return Err(Attempt::from_status(status, &text, &url));
         }
 
-        // Prefer SSE. Some OpenAI-compatible gateways ignore `stream` and
-        // answer with a single JSON body — fall back to that parse path.
         let ctype = resp
             .headers()
             .get(reqwest::header::CONTENT_TYPE)
