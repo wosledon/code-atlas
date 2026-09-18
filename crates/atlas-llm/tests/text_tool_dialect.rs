@@ -251,12 +251,15 @@ async fn one_file_per_round_still_reads_a_pages_worth_of_files() {
     assert!(total >= files.len(), "every read round is in the history");
 }
 
-/// 预算用尽后模型还在要文件：不执行，但明确告诉它「直接写正文」。
-/// 这是模型停下来的信号——只在请求里不再提供 tools，方言型模型会继续要。
+/// 只读不写：读完读取预算后不再执行，并明确告诉模型「直接写正文」——
+/// 这是模型停下来的信号（只在请求里不再提供 tools，方言型模型会继续要）。
 #[tokio::test]
-async fn budget_refusal_tells_the_model_to_write() {
+async fn reads_without_writing_stop_at_the_read_budget() {
     let seen = Arc::new(Mutex::new(Vec::new()));
-    let llm = client(fake_server(vec![text(DIALECT)], seen.clone()));
+    // 每轮换一个文件：重复调用会被去重，这里要的是「一直读新的」。
+    let files = ["a.rs", "b.rs", "c.rs", "d.rs", "e.rs"];
+    let replies: Vec<Vec<Part>> = files.iter().map(|f| text(&dialect_for(f))).collect();
+    let llm = client(fake_server(replies, seen.clone()));
     let (ran, exec) = recorder();
 
     let resp = llm
@@ -265,25 +268,58 @@ async fn budget_refusal_tells_the_model_to_write() {
         .expect("chat_with_tools");
 
     let ran = ran.lock().expect("ran").clone();
-    assert_eq!(ran.len(), 3, "预算 3 次，恰好用完：{ran:?}");
+    assert_eq!(ran.len(), 3, "读取预算 3 次，恰好用完：{ran:?}");
     assert!(!resp.text.contains("<tool_call"), "{}", resp.text);
 
     let requests = seen.lock().expect("seen");
-    assert_eq!(
-        requests[3].matches("pub fn main()").count(),
-        3,
-        "the three budgeted calls are executed for real"
-    );
+    // 3 次执行 + 2 次「预算已用尽」+ 1 轮重复（没有新调用）+ 1 轮收尾。
+    assert_eq!(requests.len(), 7);
+    // 第 4 轮（index 3）的调用被拒，拒绝文本从第 5 个请求起随历史上的问答一起发出。
     let refusal = &requests[4];
-    assert_eq!(
-        refusal.matches("pub fn main()").count(),
-        3,
-        "past the budget nothing is executed: {refusal}"
-    );
     assert!(
         refusal.contains("工具调用预算已用尽") && refusal.contains("直接输出页面 markdown 正文"),
         "the model must be told why the call was refused and what to do: {refusal}"
     );
+    assert_eq!(
+        requests[6].matches("pub fn main()").count(),
+        3,
+        "past the budget nothing is executed: {}",
+        requests[6]
+    );
+}
+
+/// 假死循环：模型反复要**同一个**文件、正文也原地重复。
+/// 重复调用不执行（结果就在上文的工具消息里），连续两轮没有新内容就收尾，
+/// 不会把预算耗在重复上。
+#[tokio::test]
+async fn repeated_identical_rounds_stop_the_loop() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let llm = client(fake_server(
+        vec![prose_then_call("## 职责\n\n正文。", "crates/x.rs")],
+        seen.clone(),
+    ));
+    let (ran, exec) = recorder();
+
+    let resp = llm
+        .chat_with_tools("system", "user", &[read_file_spec()], 2, exec)
+        .await
+        .expect("chat_with_tools");
+
+    assert_eq!(
+        ran.lock().expect("ran").len(),
+        1,
+        "the same call runs once, not once per round"
+    );
+    let requests = seen.lock().expect("seen");
+    assert_eq!(requests.len(), 3, "1 次执行 + 2 轮无进展即收尾");
+    assert!(
+        requests[2].contains("不会重复执行"),
+        "the model is told the call is a repeat: {}",
+        requests[2]
+    );
+    assert!(resp.text.contains("正文。"), "{}", resp.text);
+    assert_eq!(resp.text.matches("正文。").count(), 1, "{}", resp.text);
+    assert!(!resp.text.contains("<tool_call"), "{}", resp.text);
 }
 
 /// 一直要文件也有尽头：拒绝到上限就收尾，不会无限转下去。
@@ -298,9 +334,7 @@ async fn endless_tool_requests_stop_at_the_cap() {
         .await
         .expect("chat_with_tools");
 
-    assert_eq!(ran.lock().expect("ran").len(), 3, "预算内执行 3 次");
-    // 3 次执行 + 1 次被告知预算已尽 + 1 次再问 + 1 次收尾
-    assert_eq!(seen.lock().expect("seen").len(), 6);
+    assert_eq!(ran.lock().expect("ran").len(), 1, "同一调用只执行一次");
     assert!(!resp.text.contains("<tool_call"), "{}", resp.text);
     assert!(!resp.text.contains("parameter"), "{}", resp.text);
     // 这一轮的文本是「我来确认一下」这类旁白，不是页面内容：只执行了工具、
@@ -400,11 +434,16 @@ async fn writing_rounds_do_not_charge_the_read_budget() {
 #[tokio::test]
 async fn endless_writing_stops_at_the_call_ceiling() {
     let seen = Arc::new(Mutex::new(Vec::new()));
-    // 同一段反复重写：每轮都算「有进展」，于是只有 ceiling 能拦住它。
-    let llm = client(fake_server(
-        vec![prose_then_call("## 职责\n\n正文。", "crates/x.rs")],
-        seen.clone(),
-    ));
+    // 每轮都是新段落 + 新文件：一直「有进展」，所以只有 ceiling 能拦住它。
+    let replies: Vec<Vec<Part>> = (0..20)
+        .map(|i| {
+            prose_then_call(
+                &format!("## 段{i}\n\n内容 {i}。"),
+                &format!("crates/f{i}.rs"),
+            )
+        })
+        .collect();
+    let llm = client(fake_server(replies, seen.clone()));
     let (ran, exec) = recorder();
 
     let resp = llm
@@ -416,7 +455,7 @@ async fn endless_writing_stops_at_the_call_ceiling() {
     assert_eq!(ran, 12, "1 轮 × 3 次 × 上限系数 4 = 12 次调用");
     // 12 次执行 + 2 次被拒 + 1 次收尾
     assert_eq!(seen.lock().expect("seen").len(), 15);
-    assert!(resp.text.contains("正文。"), "{}", resp.text);
+    assert!(resp.text.contains("内容 11。"), "{}", resp.text);
     assert!(!resp.text.contains("<tool_call"), "{}", resp.text);
 }
 

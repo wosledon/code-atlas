@@ -4,15 +4,17 @@
 //! instead of pasting the whole scan into every prompt. Paths stay confined
 //! to the repo root and are filtered by privacy rules.
 
+mod cache;
 mod glob;
 mod hunt;
 mod scan;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use atlas_llm::ToolSpec;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
+pub use cache::CacheStats;
 pub use glob::shell_glob_match;
 
 pub const DEFAULT_MAX_RESULTS: usize = 40;
@@ -22,6 +24,7 @@ pub struct RepoTools {
     pub(crate) root: PathBuf,
     pub(crate) redact: Vec<String>,
     pub(crate) max_file_bytes: usize,
+    cache: cache::ToolCache,
 }
 
 impl RepoTools {
@@ -33,7 +36,13 @@ impl RepoTools {
             root,
             redact,
             max_file_bytes: max_file_bytes.max(1024),
+            cache: cache::ToolCache::default(),
         })
+    }
+
+    /// What the snapshot cache did so far (hits, misses, bytes held).
+    pub fn cache_stats(&self) -> CacheStats {
+        self.cache.stats()
     }
 
     pub fn specs() -> Vec<ToolSpec> {
@@ -131,6 +140,11 @@ impl RepoTools {
 
     /// Execute one tool call. `args` is the raw JSON arguments string produced by
     /// the model; malformed JSON is reported back as an error the model can fix.
+    ///
+    /// Identical calls are answered from the run-scoped snapshot cache (see
+    /// [`cache`]): pages ask for the same files, and re-walking the worktree for
+    /// a result another page already has is pure cost. Failures are not cached —
+    /// they are what the model is expected to react to.
     pub fn call(&self, name: &str, args: &str) -> Result<String> {
         let args: Value = if args.trim().is_empty() {
             json!({})
@@ -138,7 +152,22 @@ impl RepoTools {
             serde_json::from_str(args)
                 .map_err(|e| anyhow!("arguments must be a JSON object: {e}"))?
         };
-        let glob = args.get("glob").and_then(|v| v.as_str()).map(str::to_string);
+        // `Value` serializes with sorted keys, so the same call written with the
+        // arguments in a different order still hits the same entry.
+        let key = format!("{name}\u{1}{args}");
+        if let Some(hit) = self.cache.get(&key) {
+            return Ok(hit);
+        }
+        let out = self.run(name, &args)?;
+        self.cache.put(key, &out);
+        Ok(out)
+    }
+
+    fn run(&self, name: &str, args: &Value) -> Result<String> {
+        let glob = args
+            .get("glob")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
         let limit = args
             .get("limit")
             .or_else(|| args.get("max_results"))
@@ -230,7 +259,10 @@ mod tests {
     #[test]
     fn glob_matches_expected_shapes() {
         assert!(shell_glob_match("**/*.rs", "crates/atlas-core/src/lib.rs"));
-        assert!(shell_glob_match("crates/**/*.rs", "crates/atlas-core/src/lib.rs"));
+        assert!(shell_glob_match(
+            "crates/**/*.rs",
+            "crates/atlas-core/src/lib.rs"
+        ));
         assert!(shell_glob_match("**/.env", ".env"));
         assert!(shell_glob_match("**/.env", "web/.env"));
         assert!(!shell_glob_match("*.rs", "src/lib.rs"));
@@ -246,34 +278,107 @@ mod tests {
         std::fs::write(dir.join(".env"), "SECRET=1\n").unwrap();
         let t = tools(&dir);
 
-        assert!(t.read_file("src/lib.rs", None, None).unwrap().contains("fn main"));
+        assert!(
+            t.read_file("src/lib.rs", None, None)
+                .unwrap()
+                .contains("fn main")
+        );
         assert!(t.read_file("../../etc/hosts", None, None).is_err());
-        assert!(t.read_file("C:\\Windows\\System32\\drivers\\etc\\hosts", None, None).is_err());
+        assert!(
+            t.read_file("C:\\Windows\\System32\\drivers\\etc\\hosts", None, None)
+                .is_err()
+        );
         assert!(t.read_file(".env", None, None).is_err());
-        assert!(t.call("read_file", "{\"path\":\"src/lib.rs\",\"start_line\":1,\"end_line\":1}")
+        assert!(
+            t.call(
+                "read_file",
+                "{\"path\":\"src/lib.rs\",\"start_line\":1,\"end_line\":1}"
+            )
             .unwrap()
-            .contains("1| fn main"));
+            .contains("1| fn main")
+        );
 
         // 未指定行范围时只返回一个窗口，并指出后续从哪里续读：
         // 整文件读取会被客户端截断，模型反而要多花一轮。
-        let long = (1..=300).map(|i| format!("let v{i} = {i};\n")).collect::<String>();
+        let long = (1..=300)
+            .map(|i| format!("let v{i} = {i};\n"))
+            .collect::<String>();
         std::fs::write(dir.join("src/long.rs"), long).unwrap();
         let window = t.read_file("src/long.rs", None, None).unwrap();
         assert!(window.contains("lines 1-120 of 300"), "got {window}");
         assert!(window.contains("start_line=121"), "got {window}");
-        assert!(!window.contains("v121 ="), "window leaked past its end: {window}");
+        assert!(
+            !window.contains("v121 ="),
+            "window leaked past its end: {window}"
+        );
         let rest = t.read_file("src/long.rs", Some(121), Some(300)).unwrap();
         assert!(rest.contains("v121 = 121"), "got {rest}");
 
-        let hits = t.call("grep", "{\"pattern\":\"MAIN\",\"glob\":\"**/*.rs\"}").unwrap();
+        let hits = t
+            .call("grep", "{\"pattern\":\"MAIN\",\"glob\":\"**/*.rs\"}")
+            .unwrap();
         assert!(hits.contains("src/lib.rs:1"), "got {hits}");
-        assert!(t.call("grep", "{\"pattern\":\"SECRET\"}").unwrap().starts_with("(no matches"));
+        assert!(
+            t.call("grep", "{\"pattern\":\"SECRET\"}")
+                .unwrap()
+                .starts_with("(no matches")
+        );
         assert!(t.call("read_file", "not json at all").is_err());
 
         let defs = t.call("find_defs", "{\"name\":\"main\"}").unwrap();
         assert!(defs.contains("src/lib.rs"), "got {defs}");
         let tree = t.call("list_tree", "{\"depth\":2}").unwrap();
         assert!(tree.contains("src/"), "got {tree}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 同一文件被多页读到时不重复读盘：本次运行内返回第一次的快照。
+    #[test]
+    fn identical_calls_hit_the_snapshot_cache() {
+        let dir = std::env::temp_dir().join(format!("atlas-tools-cache-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "fn main() {}\n").unwrap();
+        let t = tools(&dir);
+
+        let first = t
+            .call("read_file", "{\"path\":\"src/lib.rs\",\"start_line\":1}")
+            .unwrap();
+        // 运行期内仓库被视为冻结：改了盘上的内容，页面之间仍看到同一份快照。
+        std::fs::write(dir.join("src/lib.rs"), "fn other() {}\n").unwrap();
+        let second = t
+            .call("read_file", "{\"path\":\"src/lib.rs\",\"start_line\":1}")
+            .unwrap();
+        assert_eq!(first, second);
+        assert!(second.contains("fn main"), "got {second}");
+
+        // 参数顺序不同是同一个调用（JSON 键序规范化）。
+        let reordered = t
+            .call("read_file", "{\"start_line\":1,\"path\":\"src/lib.rs\"}")
+            .unwrap();
+        assert_eq!(reordered, first);
+
+        // 不同行范围是不同的调用，不能互相命中。
+        std::fs::write(dir.join("src/lib.rs"), "line1\nline2\nline3\n").unwrap();
+        let window = t
+            .call(
+                "read_file",
+                "{\"path\":\"src/lib.rs\",\"start_line\":2,\"end_line\":2}",
+            )
+            .unwrap();
+        assert!(window.contains("line2"), "got {window}");
+        assert_ne!(window, first);
+
+        let stats = t.cache_stats();
+        assert_eq!(stats.hits, 2, "{stats:?}");
+        assert_eq!(stats.misses, 2, "{stats:?}");
+
+        // 失败（路径不存在、参数非法）不进缓存：模型需要看到真实的错误。
+        assert!(t.call("read_file", "{\"path\":\"missing.rs\"}").is_err());
+        assert!(t.call("read_file", "{\"path\":\"missing.rs\"}").is_err());
+        assert!(t.call("read_file", "not json").is_err());
+        assert_eq!(t.cache_stats().misses, 4, "{:?}", t.cache_stats());
+        assert_eq!(t.cache_stats().hits, 2, "{:?}", t.cache_stats());
 
         std::fs::remove_dir_all(&dir).ok();
     }

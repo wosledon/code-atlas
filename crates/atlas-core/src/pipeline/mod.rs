@@ -16,7 +16,7 @@
 use crate::git;
 use crate::lock::RunLock;
 use crate::markdown::{self, FrontMatter};
-use crate::tools::RepoTools;
+use crate::tools::{CacheStats, RepoTools};
 use crate::{ensure_agents_pointer, sha256_hex, AtlasConfig};
 use anyhow::{bail, Result};
 use atlas_analyze::{extract_symbols, read_file_excerpt, scan_repo, scan_repo_with_skips, RepoScan, SourceFile};

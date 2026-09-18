@@ -30,11 +30,11 @@ pub(super) async fn generate_pages(
     let config = Arc::new(ctx.cfg.clone());
     let use_llm = run.use_llm;
     let conc = ctx.cfg.llm.concurrency.max(1);
-    let tools = RepoTools::new(
+    let tools = Arc::new(RepoTools::new(
         &ctx.repo_root,
         ctx.cfg.privacy.redact_paths.clone(),
         ctx.cfg.privacy.max_file_bytes,
-    )?;
+    )?);
     let total_pages = run.plan.len() as u64;
     let reuse_planned = jobs.iter().filter(|j| j.reuse_body.is_some()).count();
 
@@ -58,7 +58,9 @@ pub(super) async fn generate_pages(
             }
         ),
     );
-    progress.line("逐页落盘：每页生成完成即写入 atlas/ 与索引（长运行可实时看到进度，中断不丢已完成页）");
+    progress.line(
+        "逐页落盘：每页生成完成即写入 atlas/ 与索引（长运行可实时看到进度，中断不丢已完成页）",
+    );
 
     let writer = PageWriter::new(
         session.store.clone(),
@@ -71,7 +73,7 @@ pub(super) async fn generate_pages(
         llm.clone(),
         run.scan.clone(),
         config,
-        Arc::new(tools),
+        tools.clone(),
         use_llm,
         total_pages,
     );
@@ -119,7 +121,15 @@ pub(super) async fn generate_pages(
         progress.generated(finished, generator.ok(), generator.failed());
     }
 
-    report_run(&generator, &progress, total_pages, reuse_planned, counts, use_llm);
+    report_run(
+        &generator,
+        &progress,
+        total_pages,
+        reuse_planned,
+        counts,
+        use_llm,
+        tools.cache_stats(),
+    );
     Ok(())
 }
 
@@ -159,6 +169,7 @@ fn report_run(
     reuse_planned: usize,
     counts: &mut RunCounts,
     use_llm: bool,
+    cache: CacheStats,
 ) {
     let (ok, failed, expanded, kept) = (
         generator.ok(),
@@ -180,6 +191,22 @@ fn report_run(
         ),
     );
 
+    if cache.lookups() > 0 {
+        counts.notes.push(format!(
+            "tool cache: {}/{} lookups hit ({:.0}%), {} held",
+            cache.hits,
+            cache.lookups(),
+            cache.hit_rate() * 100.0,
+            cache.held()
+        ));
+        progress.line(&format!(
+            "工具读取缓存：命中 {}/{}（{:.0}%）· 缓存 {}（同一文件被多页读到时不重复读盘）",
+            cache.hits,
+            cache.lookups(),
+            cache.hit_rate() * 100.0,
+            cache.held()
+        ));
+    }
     if !counts.kept_pages.is_empty() {
         counts.notes.push(format!(
             "kept the previous body of {} page(s) whose regeneration failed: {}",
@@ -196,7 +223,9 @@ fn report_run(
         counts.notes.push(format!(
             "depth gate rewrote {expanded}/{total_pages} pages in a second pass"
         ));
-        progress.line(&format!("深度门重写了 {expanded} 页（第一稿过浅，已二次扩写）"));
+        progress.line(&format!(
+            "深度门重写了 {expanded} 页（第一稿过浅，已二次扩写）"
+        ));
     }
     if use_llm && failed > kept {
         let first = generator

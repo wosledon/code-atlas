@@ -20,23 +20,23 @@ Code Atlas 让任何代码仓库在一次可重复运行后，拥有一份 **人
 
 以 **OpenWiki 蓝 `#1A6FB5`** 为 MD3 seed，生成完整 tonal palette 后映射到角色 token（UI 一律用 `var(--md-sys-color-*)`，不散落 hex）。
 
-| MD3 role | Light | Dark | 用途 |
-|---|---|---|---|
-| `primary` | `#1A6FB5` | `#9CC5F0` | 链接、主操作、选中节点 |
-| `on-primary` | `#FFFFFF` | `#0B2D4F` | 主按钮前景 |
-| `primary-container` | `#D4E7FB` | `#14436E` | 选中导航条、chip 底 |
-| `on-primary-container` | `#0A2B4A` | `#E3EEFA` | 容器内文字 |
-| `secondary` | `#3D8B6E` | `#7FBF9F` | Claims OK / 已核验 |
-| `secondary-container` | `#D7F0E4` | `#1E4A38` | 成功状态容器 |
-| `tertiary` | `#8B6B9E` | `#C9A8DC` | stale / 证据漂移 |
-| `error` | `#B54545` | `#F2B8B5` | 断链、证据解析失败 |
-| `error-container` | `#F9DEDC` | `#8C1D18` | 错误横幅底 |
-| `surface` | `#F7F8FA` | `#121418` | 画布与阅读底 |
-| `surface-container` | `#EEF1F5` | `#1E232B` | 侧栏、工具栏 |
-| `surface-container-high` | `#E2E7EE` | `#2A313C` | 悬停行 |
-| `outline` | `#C9D1DB` | `#4A5563` | 分割线、字段边框 |
-| `on-surface` | `#1C232B` | `#E8ECF2` | 正文 |
-| `on-surface-variant` | `#4A5563` | `#A8B2C0` | 次级说明 |
+| MD3 role                 | Light     | Dark      | 用途                   |
+| ------------------------ | --------- | --------- | ---------------------- |
+| `primary`                | `#1A6FB5` | `#9CC5F0` | 链接、主操作、选中节点 |
+| `on-primary`             | `#FFFFFF` | `#0B2D4F` | 主按钮前景             |
+| `primary-container`      | `#D4E7FB` | `#14436E` | 选中导航条、chip 底    |
+| `on-primary-container`   | `#0A2B4A` | `#E3EEFA` | 容器内文字             |
+| `secondary`              | `#3D8B6E` | `#7FBF9F` | Claims OK / 已核验     |
+| `secondary-container`    | `#D7F0E4` | `#1E4A38` | 成功状态容器           |
+| `tertiary`               | `#8B6B9E` | `#C9A8DC` | stale / 证据漂移       |
+| `error`                  | `#B54545` | `#F2B8B5` | 断链、证据解析失败     |
+| `error-container`        | `#F9DEDC` | `#8C1D18` | 错误横幅底             |
+| `surface`                | `#F7F8FA` | `#121418` | 画布与阅读底           |
+| `surface-container`      | `#EEF1F5` | `#1E232B` | 侧栏、工具栏           |
+| `surface-container-high` | `#E2E7EE` | `#2A313C` | 悬停行                 |
+| `outline`                | `#C9D1DB` | `#4A5563` | 分割线、字段边框       |
+| `on-surface`             | `#1C232B` | `#E8ECF2` | 正文                   |
+| `on-surface-variant`     | `#4A5563` | `#A8B2C0` | 次级说明               |
 
 - **Semantic extras（非 MD3 角色，仅状态）：**  
   `--status-warning: #B58A1A`（stale claim 待确认）· `--status-ok: #3D8B6E`（与 secondary 一致）
@@ -91,16 +91,16 @@ Code Atlas 让任何代码仓库在一次可重复运行后，拥有一份 **人
 
 **技术方案约定（锁定）**
 
-| 层 | 选型 | 说明 |
-|---|---|---|
-| 后端 | **Rust**（edition 2024） | CLI / 本地 HTTP API / 扫描与生成管线 |
-| 存储 | **SQLite**（`rusqlite` 或 `sqlx`，WAL） | 运行元数据、Claims、符号图、页队列；**Markdown 仍是权威真相** |
-| 大模型 | **可配置 Provider**（OpenAI 兼容 + Anthropic；本地 Ollama） | 负责规划、撰页、实体/关系抽取；证据与 no-op 不走模型 |
-| 知识库 | **SQLite 知识库**（实体、关系、Claims、**语义 chunk（总结+原文）**、向量可选） | 检索、邻域、问答上下文组装 |
-| 知识图谱 | **属性图**（typed nodes + typed edges） | 文档页 + 代码符号 + 业务实体统一建模 |
-| 前端 | **最新稳定 React**（React 19.x + Vite + TypeScript） | Visualizer / 控制台 SPA |
-| UI 体系 | **Material Design 3**（MUI v6+ + MD3 tokens） | 组件、光效、形状、light/dark |
-| 图谱绘制 | SVG/Canvas（可 `react-force-graph` 或自研） | 不引入第二套 UI kit |
+| 层       | 选型                                                                           | 说明                                                          |
+| -------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------- |
+| 后端     | **Rust**（edition 2024）                                                       | CLI / 本地 HTTP API / 扫描与生成管线                          |
+| 存储     | **SQLite**（`rusqlite` 或 `sqlx`，WAL）                                        | 运行元数据、Claims、符号图、页队列；**Markdown 仍是权威真相** |
+| 大模型   | **可配置 Provider**（OpenAI 兼容 + Anthropic；本地 Ollama）                    | 负责规划、撰页、实体/关系抽取；证据与 no-op 不走模型          |
+| 知识库   | **SQLite 知识库**（实体、关系、Claims、**语义 chunk（总结+原文）**、向量可选） | 检索、邻域、问答上下文组装                                    |
+| 知识图谱 | **属性图**（typed nodes + typed edges）                                        | 文档页 + 代码符号 + 业务实体统一建模                          |
+| 前端     | **最新稳定 React**（React 19.x + Vite + TypeScript）                           | Visualizer / 控制台 SPA                                       |
+| UI 体系  | **Material Design 3**（MUI v6+ + MD3 tokens）                                  | 组件、光效、形状、light/dark                                  |
+| 图谱绘制 | SVG/Canvas（可 `react-force-graph` 或自研）                                    | 不引入第二套 UI kit                                           |
 
 ### 6.1 大模型配置（锁定）
 
@@ -115,18 +115,18 @@ Code Atlas 让任何代码仓库在一次可重复运行后，拥有一份 **人
 
 **环境变量约定**
 
-| 变量 | 含义 |
-|---|---|
-| `ATLAS_PROVIDER` | `openai` \| `anthropic` \| `openai-compatible` \| `host-agent` |
-| `ATLAS_MODEL` | 模型 ID，如 `gpt-5.6-terra` / `claude-sonnet-5` / `qwen2.5-coder:32b` |
-| `ATLAS_BASE_URL` | OpenAI 兼容网关或 Ollama（`http://127.0.0.1:11434/v1`） |
-| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | 对应厂商密钥；文件与日志禁止落盘明文 |
-| `ATLAS_MAX_OUTPUT_TOKENS` | 单次撰页输出上限（默认 `16384`） |
-| `ATLAS_TEMPERATURE` | 默认 `0.2`（事实型文档，低温） |
-| `ATLAS_REASONING_EFFORT` | 可选：`none/low/medium/high`（网关支持时透传） |
-| `ATLAS_CONCURRENCY` | 并行页 worker 数，默认 `5` |
-| `ATLAS_DEPTH_PASS` | 生成后是否跑深度体检 + 二次扩写，默认 `true`（`0`/`false`/`off`/`no` 关闭） |
-| `ATLAS_TIMEOUT_SECS` | 单次请求超时，默认 `180` |
+| 变量                                   | 含义                                                                        |
+| -------------------------------------- | --------------------------------------------------------------------------- |
+| `ATLAS_PROVIDER`                       | `openai` \| `anthropic` \| `openai-compatible` \| `host-agent`              |
+| `ATLAS_MODEL`                          | 模型 ID，如 `gpt-5.6-terra` / `claude-sonnet-5` / `qwen2.5-coder:32b`       |
+| `ATLAS_BASE_URL`                       | OpenAI 兼容网关或 Ollama（`http://127.0.0.1:11434/v1`）                     |
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | 对应厂商密钥；文件与日志禁止落盘明文                                        |
+| `ATLAS_MAX_OUTPUT_TOKENS`              | 单次撰页输出上限（默认 `16384`）                                            |
+| `ATLAS_TEMPERATURE`                    | 默认 `0.2`（事实型文档，低温）                                              |
+| `ATLAS_REASONING_EFFORT`               | 可选：`none/low/medium/high`（网关支持时透传）                              |
+| `ATLAS_CONCURRENCY`                    | 并行页 worker 数，默认 `5`                                                  |
+| `ATLAS_DEPTH_PASS`                     | 生成后是否跑深度体检 + 二次扩写，默认 `true`（`0`/`false`/`off`/`no` 关闭） |
+| `ATLAS_TIMEOUT_SECS`                   | 单次请求超时，默认 `180`                                                    |
 
 **`atlas.toml` 示例（无密钥）**
 
@@ -187,12 +187,12 @@ strategy = "in-repo"
 
 **Provider 形态**
 
-| provider | 协议 | 典型用法 |
-|---|---|---|
-| `openai` | OpenAI Responses/Chat | 官方或 Copilot 网关 |
-| `anthropic` | Messages API | Claude 系 |
-| `openai-compatible` | Chat Completions | Ollama、LM Studio、LiteLLM、自建网关 |
-| `host-agent` | 不直连模型；输出 page-job 工具调用协议 | Claude Code / Codex / Cursor 托管模型 |
+| provider            | 协议                                   | 典型用法                              |
+| ------------------- | -------------------------------------- | ------------------------------------- |
+| `openai`            | OpenAI Responses/Chat                  | 官方或 Copilot 网关                   |
+| `anthropic`         | Messages API                           | Claude 系                             |
+| `openai-compatible` | Chat Completions                       | Ollama、LM Studio、LiteLLM、自建网关  |
+| `host-agent`        | 不直连模型；输出 page-job 工具调用协议 | Claude Code / Codex / Cursor 托管模型 |
 
 **模型档位（建议）**
 
@@ -317,26 +317,26 @@ flowchart TB
 
 **权威关系（按 `output.strategy`）：**
 
-| strategy | 权威 Markdown | SQLite | 说明 |
-|---|---|---|---|
-| `in-repo`（默认） | `<repo>/atlas/` | 投影/索引 | 与代码同仓、同 PR |
-| `external-dir` | 仓外目录（见 K.10） | 投影/索引 | 源码仓可保持干净 |
-| `db-only` | **无**（逻辑权威在库） | 事实源 | `export` 才生成 md；适合只读扫描 |
+| strategy          | 权威 Markdown          | SQLite    | 说明                             |
+| ----------------- | ---------------------- | --------- | -------------------------------- |
+| `in-repo`（默认） | `<repo>/atlas/`        | 投影/索引 | 与代码同仓、同 PR                |
+| `external-dir`    | 仓外目录（见 K.10）    | 投影/索引 | 源码仓可保持干净                 |
+| `db-only`         | **无**（逻辑权威在库） | 事实源    | `export` 才生成 md；适合只读扫描 |
 
 非 `in-repo` 时，目标仓可写入短指针（`docs/ATLAS.md` 或 `AGENTS.md` 标记块）指向真实路径/导出方式，避免 Agent 搜不到。SQLite 始终可 `atlas reindex` 从权威侧重建（`db-only` 时从库自身 + 源码重扫）。
 
 ## B. 生成 Wiki 树（示例：中型服务仓）
 
-| 路径 | 类型 | 一句话职责 |
-|---|---|---|
-| `atlas/quickstart.md` | Entry | 仓库是什么、如何跑、地图到各 section |
-| `atlas/architecture/overview.md` | Architecture | 模块边界与运行时拓扑（含 Mermaid） |
-| `atlas/api/surface.md` | API Surface | 路由/命令/公共类型索引与入口路径 |
-| `atlas/data/models.md` | Data Model | 存储、schema、不变量 |
-| `atlas/workflows/` | Workflow | 关键业务或 CI 流程 |
-| `atlas/operations/` | Runbook | 配置、部署、故障线索 |
-| `atlas/testing/` | Testing | 测试布局与如何验证关键行为 |
-| `atlas/source-map.md` | Index | 路径 → 责任的稳定交叉表（可选） |
+| 路径                             | 类型         | 一句话职责                           |
+| -------------------------------- | ------------ | ------------------------------------ |
+| `atlas/quickstart.md`            | Entry        | 仓库是什么、如何跑、地图到各 section |
+| `atlas/architecture/overview.md` | Architecture | 模块边界与运行时拓扑（含 Mermaid）   |
+| `atlas/api/surface.md`           | API Surface  | 路由/命令/公共类型索引与入口路径     |
+| `atlas/data/models.md`           | Data Model   | 存储、schema、不变量                 |
+| `atlas/workflows/`               | Workflow     | 关键业务或 CI 流程                   |
+| `atlas/operations/`              | Runbook      | 配置、部署、故障线索                 |
+| `atlas/testing/`                 | Testing      | 测试布局与如何验证关键行为           |
+| `atlas/source-map.md`            | Index        | 路径 → 责任的稳定交叉表（可选）      |
 
 小仓库：`quickstart.md` + 1–2 个 section 页即可。大仓库：合并同类，init 仍 ≤ 8 页；update 可增页。
 
@@ -435,20 +435,20 @@ flowchart LR
 
 ## G. 与 OpenWiki 的对齐 / 刻意裁剪
 
-| 维度 | 对齐 | 本设计裁剪 |
-|---|---|---|
-| 输出位置 | 仓内 `atlas/`（原 `openwiki/`） | 自有品牌名与路径 |
-| 入口 | `quickstart.md` | 同 |
-| 证据 | Grounded Claims + git | MVP：claims JSON sidecar，不做 OKF 全量校验器 |
-| 更新 | 增量 + no-op | 同；先脚本级 gate，再 CI |
-| 模式 | code wiki | **不做** personal brain / 十类 connector |
-| 集成 | coding-agent 生命周期 | 先 CLI + skill 提示词，后 MCP `begin/plan/page/finish` |
-| 可视化 | graph + reader | 保留；产品化为 **React + MD3** 桌面体验（本地 `atlas web`） |
-| 运行时 | Node 深栈（DeepAgents 等） | **Rust + SQLite** 自托管，无 Node 服务端依赖 |
-| 模型接入 | 13+ provider、OpenRouter 全家桶 | MVP：OpenAI 兼容 + Anthropic + host-agent；Ollama 走兼容口 |
-| 页队列 | 深度 durable queue + Claims 全量 | MVP：SQLite 页队列 + 并行 worker；Claims 先 JSON sidecar |
-| 知识图谱 | 页为中心的文档图 | 扩展为 **typed 实体属性图**（符号/API/数据/配置） |
-| 知识库 | 仓内 Markdown 即库 | Markdown 权威 + **语义 chunk（LLM summary+body）** + SQLite/FTS/可选向量 |
+| 维度     | 对齐                             | 本设计裁剪                                                               |
+| -------- | -------------------------------- | ------------------------------------------------------------------------ |
+| 输出位置 | 仓内 `atlas/`（原 `openwiki/`）  | 自有品牌名与路径                                                         |
+| 入口     | `quickstart.md`                  | 同                                                                       |
+| 证据     | Grounded Claims + git            | MVP：claims JSON sidecar，不做 OKF 全量校验器                            |
+| 更新     | 增量 + no-op                     | 同；先脚本级 gate，再 CI                                                 |
+| 模式     | code wiki                        | **不做** personal brain / 十类 connector                                 |
+| 集成     | coding-agent 生命周期            | 先 CLI + skill 提示词，后 MCP `begin/plan/page/finish`                   |
+| 可视化   | graph + reader                   | 保留；产品化为 **React + MD3** 桌面体验（本地 `atlas web`）              |
+| 运行时   | Node 深栈（DeepAgents 等）       | **Rust + SQLite** 自托管，无 Node 服务端依赖                             |
+| 模型接入 | 13+ provider、OpenRouter 全家桶  | MVP：OpenAI 兼容 + Anthropic + host-agent；Ollama 走兼容口               |
+| 页队列   | 深度 durable queue + Claims 全量 | MVP：SQLite 页队列 + 并行 worker；Claims 先 JSON sidecar                 |
+| 知识图谱 | 页为中心的文档图                 | 扩展为 **typed 实体属性图**（符号/API/数据/配置）                        |
+| 知识库   | 仓内 Markdown 即库               | Markdown 权威 + **语义 chunk（LLM summary+body）** + SQLite/FTS/可选向量 |
 
 ## H. 范围边界（非目标）
 
@@ -466,37 +466,37 @@ flowchart LR
 
 ### I.1 图模型
 
-| 层 | 内容 |
-|---|---|
+| 层               | 内容                                                                                |
+| ---------------- | ----------------------------------------------------------------------------------- |
 | **Node（实体）** | `id` · `kind` · `name` · `canonical_key` · `props(JSON)` · `status(active/retired)` |
-| **Edge（关系）** | `src_id` · `dst_id` · `rel` · `props` · `weight` · `run_id` |
-| **Evidence** | 关键边/属性可挂 `repo://path#L10-L20` 或 `atlas://page` |
+| **Edge（关系）** | `src_id` · `dst_id` · `rel` · `props` · `weight` · `run_id`                         |
+| **Evidence**     | 关键边/属性可挂 `repo://path#L10-L20` 或 `atlas://page`                             |
 
 **节点类型（kind）——封闭集合**
 
-| kind | 示例 | 主要来源 |
-|---|---|---|
-| `page` | `atlas/architecture/overview.md` | Wiki 页 |
-| `module` | `atlas-server`、`auth` | 目录/包边界 |
-| `symbol` | `Gateway::authorize` | analyze 符号图 |
-| `api` | `POST /v1/session` | 路由/命令入口 |
-| `data` | 表 `users`、事件 `OrderPlaced` | schema/类型 |
-| `config` | `ATLAS_MODEL`、`atlas.toml [llm]` | 配置键（值脱敏） |
-| `external` | Ollama、GitHub | 依赖与集成 |
-| `workflow` | CI `docs-update` | 工作流 |
+| kind       | 示例                              | 主要来源         |
+| ---------- | --------------------------------- | ---------------- |
+| `page`     | `atlas/architecture/overview.md`  | Wiki 页          |
+| `module`   | `atlas-server`、`auth`            | 目录/包边界      |
+| `symbol`   | `Gateway::authorize`              | analyze 符号图   |
+| `api`      | `POST /v1/session`                | 路由/命令入口    |
+| `data`     | 表 `users`、事件 `OrderPlaced`    | schema/类型      |
+| `config`   | `ATLAS_MODEL`、`atlas.toml [llm]` | 配置键（值脱敏） |
+| `external` | Ollama、GitHub                    | 依赖与集成       |
+| `workflow` | CI `docs-update`                  | 工作流           |
 
 **关系类型（rel）——封闭集合**
 
-| rel | 含义 | 示例 |
-|---|---|---|
-| `describes` | 页描述实体 | page → module |
-| `part_of` | 组成 | symbol → module |
-| `calls` | 调用 | module → api |
-| `depends_on` | 依赖 | module → external |
-| `stores` / `reads` / `writes` | 数据面 | module → data |
-| `configured_by` | 配置 | module → config |
-| `evidenced_by` | 证据链 | claim/边 → 源码 |
-| `links_to` / `mentions` | 文档关联 | page → page/entity |
+| rel                           | 含义       | 示例               |
+| ----------------------------- | ---------- | ------------------ |
+| `describes`                   | 页描述实体 | page → module      |
+| `part_of`                     | 组成       | symbol → module    |
+| `calls`                       | 调用       | module → api       |
+| `depends_on`                  | 依赖       | module → external  |
+| `stores` / `reads` / `writes` | 数据面     | module → data      |
+| `configured_by`               | 配置       | module → config    |
+| `evidenced_by`                | 证据链     | claim/边 → 源码    |
+| `links_to` / `mentions`       | 文档关联   | page → page/entity |
 
 ### I.2 抽取策略
 
@@ -525,12 +525,12 @@ GET /api/graph/export
 
 ### J.1 四层结构
 
-| 层 | 载体 | 角色 |
-|---|---|---|
-| 权威文档 | `atlas/**/*.md` + `.claims/` | 人类/Agent 可读真相 |
-| 结构化库 | SQLite entities/relations/claims | 检索、邻域、过滤 |
-| **语义块层** | `chunks`：**summary + body**（+ span/evidence） | RAG 命中单元、上下文组装 |
-| 检索索引 | FTS5（对 summary+body）+（可选）embeddings（优先对 summary） | 关键词与语义召回 |
+| 层           | 载体                                                         | 角色                     |
+| ------------ | ------------------------------------------------------------ | ------------------------ |
+| 权威文档     | `atlas/**/*.md` + `.claims/`                                 | 人类/Agent 可读真相      |
+| 结构化库     | SQLite entities/relations/claims                             | 检索、邻域、过滤         |
+| **语义块层** | `chunks`：**summary + body**（+ span/evidence）              | RAG 命中单元、上下文组装 |
+| 检索索引     | FTS5（对 summary+body）+（可选）embeddings（优先对 summary） | 关键词与语义召回         |
 
 ### J.2 语义 Chunk（LLM 参与，锁约定）
 
@@ -572,11 +572,11 @@ flowchart LR
   V --> DB[(FTS + embeddings 可选)]
 ```
 
-| mode | 行为 | 适用 |
-|---|---|---|
-| `structural` | 仅标题层级 + 代码块 + token 窗口；摘要=首句/小节标题 | 离线、无密钥、CI 冷启动 |
-| `llm-semantic` | 模型按语义划界，并为每块写中文/英文 summary（输出 JSON） | 质量优先 |
-| `hybrid`（默认） | 先 structural，再对过长/过碎段调 LLM 调整边界并写 summary | 成本与质量平衡 |
+| mode             | 行为                                                      | 适用                    |
+| ---------------- | --------------------------------------------------------- | ----------------------- |
+| `structural`     | 仅标题层级 + 代码块 + token 窗口；摘要=首句/小节标题      | 离线、无密钥、CI 冷启动 |
+| `llm-semantic`   | 模型按语义划界，并为每块写中文/英文 summary（输出 JSON）  | 质量优先                |
+| `hybrid`（默认） | 先 structural，再对过长/过碎段调 LLM 调整边界并写 summary | 成本与质量平衡          |
 
 **LLM 分块提示约定（输出契约）**
 
@@ -651,13 +651,13 @@ chunk_entities(chunk_id, entity_key)
 
 ### K.2 生成页手改策略
 
-| 区域 | 策略 |
-|---|---|
-| `atlas/INSTRUCTIONS.md` | **用户所有**，工具只读（除非 `--force-instructions`） |
-| 生成页正文 | **工具所有**；用户修改会在下次 update 被覆盖，除非进入保护段 |
-| 保护段 | 在生成页中允许 `<!-- atlas:keep:start --> … <!-- atlas:keep:end -->`，update 原样保留 |
-| front matter | 工具可修 `type/title/description/tags` 以保持 OKF；`x-*` 扩展字段保留 |
-| 冲突检测 | 若页 `body_hash` 与上次 run 不一致且非保护段：默认 **覆盖** 并在 Runs 记 `user_edit_overwritten`；`update --merge-notes` 则把差异摘要写进 Claims 待确认区 |
+| 区域                    | 策略                                                                                                                                                      |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `atlas/INSTRUCTIONS.md` | **用户所有**，工具只读（除非 `--force-instructions`）                                                                                                     |
+| 生成页正文              | **工具所有**；用户修改会在下次 update 被覆盖，除非进入保护段                                                                                              |
+| 保护段                  | 在生成页中允许 `<!-- atlas:keep:start --> … <!-- atlas:keep:end -->`，update 原样保留                                                                     |
+| front matter            | 工具可修 `type/title/description/tags` 以保持 OKF；`x-*` 扩展字段保留                                                                                     |
+| 冲突检测                | 若页 `body_hash` 与上次 run 不一致且非保护段：默认 **覆盖** 并在 Runs 记 `user_edit_overwritten`；`update --merge-notes` 则把差异摘要写进 Claims 待确认区 |
 
 反模式：不静默合并语义冲突的两份正文（易出假文档）。
 
@@ -676,13 +676,13 @@ front_matter_tags = "en"  # tags 保持英文稳定键；title/description 跟 l
 
 ### K.4 源码分析语言范围（MVP）
 
-| 能力 | MVP | 手段 |
-|---|---|---|
-| 目录/清单/README | 全部仓库 | 通用扫描 |
-| 符号与导出 | **Rust、TypeScript/JS、Python** | tree-sitter；缺失则 glob+正则降级 |
-| 调用边 | 上述三语 best-effort | 静态近似，不求 soundness |
-| 路由/API | Rust(axum/actix)、TS(express/fastify/nest)、Python(fastapi/flask) 常见形态 | 启发式 + LLM 补全 |
-| 其他语言 | 记录为 `module` 粒度 | 无深解析 |
+| 能力             | MVP                                                                        | 手段                              |
+| ---------------- | -------------------------------------------------------------------------- | --------------------------------- |
+| 目录/清单/README | 全部仓库                                                                   | 通用扫描                          |
+| 符号与导出       | **Rust、TypeScript/JS、Python**                                            | tree-sitter；缺失则 glob+正则降级 |
+| 调用边           | 上述三语 best-effort                                                       | 静态近似，不求 soundness          |
+| 路由/API         | Rust(axum/actix)、TS(express/fastify/nest)、Python(fastapi/flask) 常见形态 | 启发式 + LLM 补全                 |
+| 其他语言         | 记录为 `module` 粒度                                                       | 无深解析                          |
 
 `atlas.toml` 可 `analyze.languages = ["rust","ts","py"]`；关闭 LLM 抽取时仍出确定性符号图。
 
@@ -792,11 +792,11 @@ atlas mcp                    # MCP stdio：search/read/write/delete page、chunk
 
 **默认 `strategy = "in-repo"`**，但产品必须支持把权威文档放在仓外或只进库。
 
-| strategy | `atlas_root` | git 行为 | 适用 |
-|---|---|---|---|
-| `in-repo` | 相对目标仓，默认 `atlas/` | 生成物随源码提交；CI 可开 PR | 协作、code review、Agent 就地读 |
-| `external-dir` | `external_root/<repo_slug>/`（或显式路径） | 源码仓 **不提交** md；外置目录可单独建仓 | 私有仓、只读分析、文档仓分离 |
-| `db-only` | 不写权威 md | 无文档 commit；`export` 临时目录 | 纯图谱/检索、自动化流水线 |
+| strategy       | `atlas_root`                               | git 行为                                 | 适用                            |
+| -------------- | ------------------------------------------ | ---------------------------------------- | ------------------------------- |
+| `in-repo`      | 相对目标仓，默认 `atlas/`                  | 生成物随源码提交；CI 可开 PR             | 协作、code review、Agent 就地读 |
+| `external-dir` | `external_root/<repo_slug>/`（或显式路径） | 源码仓 **不提交** md；外置目录可单独建仓 | 私有仓、只读分析、文档仓分离    |
+| `db-only`      | 不写权威 md                                | 无文档 commit；`export` 临时目录         | 纯图谱/检索、自动化流水线       |
 
 **约束**
 
@@ -821,14 +821,14 @@ atlas mcp                    # MCP stdio：search/read/write/delete page、chunk
 
 **当前结构**
 
-| 位置 | 拆分方式 |
-|---|---|
-| `crates/atlas-store/src/` | `models` / `runs` / `pages` / `chunks` / `entities` / `search` / `query` / `schema` / `tests` |
-| `crates/atlas-core/src/` | `config/{mod,sections}` / `paths` / `scaffold` / `pipeline/*`（16 个文件：`plan` / `prepare` / `generate` / `write` / `graph` / `maintenance` 等阶段 + `brief` / `outline` / `evidence` / `prompt` / `template` / `plan_modules` 支撑） |
-| `crates/atlas-analyze/src/` | `types` / `ignore` / `scan` / `symbols` / `outline` |
-| `crates/atlas-llm/src/` | `types` / `wire` / `client/{mod,tools,providers}` |
-| `crates/atlas-server/src/` | `auth` / `common` / `assets` / `runs` / `projects` / `graph` / `search` / `chat` / `tree` / `config` |
-| `web/src/` | `components/chat/*`（7 文件）、`components/graph/*`（7 文件）；`pages/Search.tsx`、`pages/Graph.tsx` 只留页面壳 |
+| 位置                        | 拆分方式                                                                                                                                                                                                                                |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `crates/atlas-store/src/`   | `models` / `runs` / `pages` / `chunks` / `entities` / `search` / `query` / `schema` / `tests`                                                                                                                                           |
+| `crates/atlas-core/src/`    | `config/{mod,sections}` / `paths` / `scaffold` / `pipeline/*`（16 个文件：`plan` / `prepare` / `generate` / `write` / `graph` / `maintenance` 等阶段 + `brief` / `outline` / `evidence` / `prompt` / `template` / `plan_modules` 支撑） |
+| `crates/atlas-analyze/src/` | `types` / `ignore` / `scan` / `symbols` / `outline`                                                                                                                                                                                     |
+| `crates/atlas-llm/src/`     | `types` / `wire` / `client/{mod,tools,providers}`                                                                                                                                                                                       |
+| `crates/atlas-server/src/`  | `auth` / `common` / `assets` / `runs` / `projects` / `graph` / `search` / `chat` / `tree` / `config`                                                                                                                                    |
+| `web/src/`                  | `components/chat/*`（7 文件）、`components/graph/*`（7 文件）；`pages/Search.tsx`、`pages/Graph.tsx` 只留页面壳                                                                                                                         |
 
 ---
 
@@ -846,7 +846,10 @@ atlas mcp                    # MCP stdio：search/read/write/delete page、chunk
 ### L.2 生成效率
 
 - **并发：** 撰页 worker 默认 `5`（`llm.concurrency` / `ATLAS_CONCURRENCY`）。
-- **只读工具：** 模型可按需调用 `list_files(pattern)` / `read_file(path, start?, end?)` / `grep(pattern, glob?)`，轮数上限 `llm.max_tool_rounds`（默认 6）。工具由 Rust 侧强制边界：仅限仓库内、跳过 `redact_paths`、单文件字节上限；越界返回错误而不是内容。
+- **只读工具：** 模型可按需调用 `list_files(pattern)` / `read_file(path, start?, end?)` / `grep(pattern, glob?)`，由 Rust 侧强制边界：仅限仓库内、跳过 `redact_paths`、单文件字节上限；越界返回错误而不是内容。
+- **工具预算（按调用计，不是按轮）：** `llm.max_tool_rounds`（默认 2）= 每页 `max_tool_rounds × 3` 次**「只读不写」**的调用额度；**边写边读的调用不计费**（流式模型写一段读一个文件，那些调用在推进页面，计费会把页面截在半句话上），它们只受每页 `预算 × 4` 的总调用上限约束。额度用尽后不再下发 tools，并在工具结果里明确回答「预算已用尽，直接输出正文」最多 2 次，然后带着已有正文收尾。
+- **快照缓存：** 一次 run 内 `RepoTools` 共享一份结果缓存（键 = 工具名 + 规范化参数，`Value` 序列化天然按键排序），同一文件被多页读到时不重复读盘/扫目录；缓存 32 MiB 封顶（按字节报告占用，小仓库不显示成 `0 KiB`）、失败不入缓存、运行期仓库视为冻结（run 持锁且指纹基于工作区）。汇总行报「工具读取缓存：命中 X/Y（Z%）· 缓存 N」，run note 同步记一条；实测同一小仓 17 页并发 4 时 `30/34 lookups hit (88%)`。
+- **防假死循环：** 同一调用（参数键序无关）在同一页里第二次出现时**不执行**，直接回答「与已执行的调用完全相同，结果在上面的工具消息里」；连续 2 轮既没有新正文、也没有新调用（模型原地重复读同一个文件 / 重发同一段正文）即判定卡死并提前收尾（warn 出轮次），不再把预算耗在重复上。
 - **证据瘦身：** 每页只发「仓库地图 + 本页 focus + 模块内文件清单」，不再把整仓正文塞进 prompt；需要细节时由模型主动读文件。
 - **增量复用：** `pages.evidence_hash` 存页指纹（**提示词盐 `prompt_salt` + focus + evidence + 模块内文件 `rel:size`**）。指纹未变且文件仍在 → 直接复用正文、跳过 LLM；`body_hash` 未变且 chunk 签名（`source` 末尾 `mode|target_tokens|llm=`）全部匹配 → 跳过重新分块。改提示词 / 换模型 / 调 `llm.depth_pass` / 调 `kb.chunk.*` 都会让对应产物重建，不再出现「改了提示词却不生效」或「配置改了还用旧切分」。
 - **指纹必须稳定：** 扫描与指纹**忽略 Atlas 自身维护的文件**（`data/atlas.db`(+`-wal`/`-shm`)、`data/atlas.lock(.heartbeat)`、根 `AGENTS.md`、`atlas.toml.example`，见 `Config::ignored_scan_files` + `scan_repo_with_skips`），页文件写盘也做了归一化（`markdown::write_page` 去尾空白后补一个 `\n`），`AGENTS.md` 的指针块按标记行整体替换（幂等）。否则「每次 update 都长一个换行 / 数据库每次变大 / init 末尾才写出 `AGENTS.md`」会污染全仓指纹，导致每轮全量重生成。生成侧从不读这两个文件，排除它们在语义上是安全的。
@@ -890,6 +893,7 @@ atlas mcp                    # MCP stdio：search/read/write/delete page、chunk
 - 已验证（OpenAI 兼容协议，本轮）：回传 assistant `tool_calls` 时必须带 `"type":"function"`，否则用过工具的页第二轮起被 StepFun 判 400（`llm http 400 Bad Request`）；现在 `ToolCallPayload.kind` 默认 `function`（单测 + 严格 stub 的 payload 校验，`reject=0`）。错误信息改为 body 优先（`llm http 400: <body 前 400 字符> @ <url>`），瞬时错误（408/409/425/429/5xx/传输失败）按 `400ms×(n+1)²` 退避重试，工具回合失败自动退回无工具重试；回退模板的页把指纹标成 `{fp}+template`，下一轮不会被误当作「已生成」复用。
 - 已验证（进度与即时落盘，本轮）：离线 stub（`STUB_DELAY=2`、17 页、`concurrency=5`）上跑 `atlas init`，`atlas/` 下的 md 在 +4.5s / +10.5s / +16.5s / +22.6s **分批落盘**（每批 5 页，即「生成完一页立刻写一页」），最后才写 `README.md` / `index.md`；重定向到文件的日志 88 行、`CR=0`、无 spinner 帧、无 ANSI 转义（改造前是同一条进度反复逐帧打印）。同一副本上 `ATLAS_PROGRESS=bars` 强制画条同样 exit 0（验证悬挂钩子与防重入不死锁）；随后 `atlas update` 0.3s 结束、**0 次 LLM 调用**（桩 `chat/tool_rounds/chunks` 计数不变），落盘行全为「未变化 · chunks 3 复用」。
 - 已验证（mermaid，本轮）：真实浏览器 + vite dev + mermaid 12.0.0 对仓内 `atlas/` 的 23 个图逐块跑 `mermaid.parse/render`：修复前 5 个失败（保留字 id 3 / `/` 开头标签 1 / 含 `()` 1），`repairMermaid` 后 **23/23 渲染出 SVG**，5 个原失败块全部救回、18 个原本正常的图 `edits=0`（零触碰）、二次修复稳定（不再产生新编辑）；阅读器页面实测 `03-模块详解/crates-atlas-core.md`（12 节点 11 条边，`graph.rs`/`seed_graph` 文本保留）等 5 个原失败页 `failures:0 / repaired:1`，`02-系统设计/整体架构.md` 无回归（`0/0`）。回退面板另用临时坏图页验证：2 个不可修复块 → 0 个 SVG + 2 个面板，`<pre>` 显示原文且换行为真实换行（验后已删该临时页）。`cargo test --workspace` 43 通过（含新增 `brief_demands_parsable_mermaid`）、`npx tsc -b` 通过。
+- 已验证（工具缓存 + 防死循环，本轮）：`atlas-core/src/tools/cache.rs`（4 单测：命中计数 / 键隔离 / 超大条目不缓存 / 覆写不重复计字节）+ `tools::tests::identical_calls_hit_the_snapshot_cache`（同一 `read_file` 第二次命中快照、参数键序无关命中、改盘上内容运行期内仍是快照、不同行范围不互撞、失败与非法 JSON 不入缓存且不命中）；`atlas-llm/tests/text_tool_dialect.rs` 10 用例覆盖：跨轮 id 唯一、边写边读正文只留一份、续写跨轮保序、**重复调用只执行一次**（`repeated_identical_rounds_stop_the_loop`：3 个请求内收尾，模型收到「不会重复执行」）、只读不写恰好用满预算后 2 次拒绝 + 收尾（7 个请求）、边写边读的读取不计费（6 段 6 次执行）、无限写读在第 12 次调用（`1×3×4`）收敛。`cargo test --workspace` 全绿、`cargo clippy --workspace --all-targets` 无告警。
 - 差距：向量检索未实现（仅 FTS5+LIKE）；`hybrid` 目前等价 `llm-semantic`（未做「先结构再微调」）；工具是只读（无 write/patch/MCP `atlas_*` 工具面）；`ATLAS_PROVIDER=host-agent` 仍走模板回退；`clippy` 仍留少量历史风格提示（`collapsible_if` / `too_many_arguments`），非本次拆分引入；`depth_gaps` 的门槛目前只在单测、模板模式与离线 stub（结构指标达标即通过）上验证过，本机无真实 API key，真实中文 LLM 输出上的误伤率待观察。
 
 ### L.9 进度与终端输出契约
