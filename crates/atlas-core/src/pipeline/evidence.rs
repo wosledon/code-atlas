@@ -4,15 +4,18 @@ use super::plan::plan_pages;
 use super::plan_modules::detect_code_modules;
 use super::outline::{commands, manifest_summary, source_outline};
 
-/// Compact repository map handed to the model together with the file/read
-/// tools. It intentionally contains *no* large source dumps: the model pulls the
-/// code it needs through `read_file` / `grep`, which keeps prompts small and
-/// lets pages cover the whole repository instead of a handful of sampled files.
-pub(crate) fn build_evidence(scan: &RepoScan, page: &PlannedPage) -> String {
-    let mut out = String::new();
-    out.push_str("## Repository\n");
-    out.push_str(&format!("root: {}\n", scan.root.display()));
-    out.push_str(&format!(
+/// Evidence fragments identical for every page in one run (built once).
+pub(crate) struct EvidenceShared {
+    header: String,
+    docs_section: String,
+}
+
+/// Build the shared evidence header + wiki index once per run.
+pub(crate) fn build_evidence_shared(scan: &RepoScan, plan: &[PlannedPage]) -> EvidenceShared {
+    let mut header = String::new();
+    header.push_str("## Repository\n");
+    header.push_str(&format!("root: {}\n", scan.root.display()));
+    header.push_str(&format!(
         "source files: {} · languages: {}\n",
         scan.files.iter().filter(|f| f.language.is_some()).count(),
         if scan.languages.is_empty() {
@@ -21,25 +24,58 @@ pub(crate) fn build_evidence(scan: &RepoScan, page: &PlannedPage) -> String {
             scan.languages.join(", ")
         }
     ));
-    // Keep shared prose short: long README/DESIGN dumps are repeated on every
-    // page and dominate prompt tokens. The model can open the real files with
-    // `read_file` when a section needs them.
     if let Some(readme) = &scan.readme_excerpt {
-        out.push_str("\n## README excerpt\n");
-        out.push_str(&readme.chars().take(900).collect::<String>());
-        out.push('\n');
+        header.push_str("\n## README excerpt\n");
+        header.push_str(&readme.chars().take(900).collect::<String>());
+        header.push('\n');
     }
-    out.push_str(&manifest_summary(scan));
-    out.push_str(&commands(scan));
-    out.push_str("\n## Modules discovered\n");
+    header.push_str(&manifest_summary(scan));
+    header.push_str(&commands(scan));
+    header.push_str("\n## Modules discovered\n");
     for (key, label, hint) in detect_code_modules(scan).iter().take(12) {
         let files = scan
             .files
             .iter()
             .filter(|f| f.language.is_some() && f.rel.starts_with(hint.as_str()))
             .count();
-        out.push_str(&format!("- {label} (`{key}` → `{hint}`) · {files} source files\n"));
+        header.push_str(&format!("- {label} (`{key}` → `{hint}`) · {files} source files\n"));
     }
+
+    // Prefer the live plan; fall back to a structural plan preview.
+    let owned;
+    let docs: &[PlannedPage] = if plan.is_empty() {
+        owned = plan_pages(scan, "plan", None);
+        &owned
+    } else {
+        plan
+    };
+    let mut docs_section = String::from("\n## Documents this wiki will contain\n");
+    for p in docs.iter().take(12) {
+        docs_section.push_str(&format!("- [{}]({}) — {}\n", p.title, p.rel_path, p.description));
+    }
+    EvidenceShared { header, docs_section }
+}
+
+/// Compact repository map handed to the model together with the file/read
+/// tools. It intentionally contains *no* large source dumps: the model pulls the
+/// code it needs through `read_file` / `grep`, which keeps prompts small and
+/// lets pages cover the whole repository instead of a handful of sampled files.
+/// Prefer [`build_evidence_with_shared`] in run paths; this helper is for tests
+/// and one-off previews.
+#[allow(dead_code)]
+pub(crate) fn build_evidence(scan: &RepoScan, page: &PlannedPage) -> String {
+    let shared = build_evidence_shared(scan, &plan_pages(scan, "plan", None));
+    build_evidence_with_shared(scan, page, &shared)
+}
+
+/// Per-page evidence: shared header + module-scoped file list + symbol outline.
+pub(crate) fn build_evidence_with_shared(
+    scan: &RepoScan,
+    page: &PlannedPage,
+    shared: &EvidenceShared,
+) -> String {
+    let mut out = String::with_capacity(shared.header.len() + 2048);
+    out.push_str(&shared.header);
     let module_root = module_scope(page);
     let relevant: Vec<&SourceFile> = scan
         .files
@@ -51,8 +87,7 @@ pub(crate) fn build_evidence(scan: &RepoScan, page: &PlannedPage) -> String {
         "\n## Source files in scope ({})\n",
         if module_root.is_some() { "module" } else { "whole repository" }
     ));
-    let mut listed = 0;
-    for f in &relevant {
+    for (listed, f) in relevant.iter().enumerate() {
         // The list is orientation, not content: the outline below names the
         // files that matter, and `list_files` has the rest.
         if listed >= 60 {
@@ -60,13 +95,9 @@ pub(crate) fn build_evidence(scan: &RepoScan, page: &PlannedPage) -> String {
             break;
         }
         out.push_str(&format!("- {} ({}, {} B)\n", f.rel, lang_of(f), f.size));
-        listed += 1;
     }
     out.push_str(&source_outline(scan, page));
-    out.push_str("\n## Documents this wiki will contain\n");
-    for p in plan_pages(scan, "plan", None).iter().take(12) {
-        out.push_str(&format!("- [{}]({}) — {}\n", p.title, p.rel_path, p.description));
-    }
+    out.push_str(&shared.docs_section);
     out
 }
 
@@ -97,11 +128,10 @@ pub(crate) fn page_fingerprint(
     feed.push_str(evidence);
     feed.push('\n');
     for f in scan.files.iter() {
-        if let Some(root) = module_root.as_deref() {
-            if !f.rel.starts_with(root) {
+        if let Some(root) = module_root.as_deref()
+            && !f.rel.starts_with(root) {
                 continue;
             }
-        }
         feed.push_str(&format!("{}:{}\n", f.rel, f.size));
     }
     sha256_hex(feed.as_bytes())
@@ -158,7 +188,7 @@ pub(crate) fn top_dirs(scan: &RepoScan) -> Vec<(String, usize)> {
         *map.entry(top).or_default() += 1;
     }
     let mut v: Vec<(String, usize)> = map.into_iter().collect();
-    v.sort_by(|a, b| b.1.cmp(&a.1));
+    v.sort_by_key(|b| std::cmp::Reverse(b.1));
     v
 }
 
@@ -196,17 +226,14 @@ pub(crate) fn run_commands(scan: &RepoScan) -> Vec<String> {
     if scan.manifests.iter().any(|p| p.ends_with("package.json")) {
         let pkg = scan.root.join("package.json");
         let pkg = if pkg.exists() { Some(pkg) } else { scan.manifests.iter().find(|p| p.ends_with("package.json")).cloned() };
-        if let Some(p) = pkg {
-            if let Ok(text) = std::fs::read_to_string(&p) {
-                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
-                    if let Some(scripts) = v.get("scripts").and_then(|s| s.as_object()) {
+        if let Some(p) = pkg
+            && let Ok(text) = std::fs::read_to_string(&p)
+                && let Ok(v) = serde_json::from_str::<serde_json::Value>(&text)
+                    && let Some(scripts) = v.get("scripts").and_then(|s| s.as_object()) {
                         for k in scripts.keys() {
                             cmds.push(format!("npm run {k}"));
                         }
                     }
-                }
-            }
-        }
     }
     if scan.manifests.iter().any(|p| p.ends_with("Cargo.toml")) {
         cmds.push("cargo build".into());
@@ -237,7 +264,7 @@ pub(crate) fn todo_hotspots(scan: &RepoScan) -> Vec<(String, usize)> {
             hits.push((f.rel.clone(), n));
         }
     }
-    hits.sort_by(|a, b| b.1.cmp(&a.1));
+    hits.sort_by_key(|b| std::cmp::Reverse(b.1));
     hits.truncate(15);
     hits
 }

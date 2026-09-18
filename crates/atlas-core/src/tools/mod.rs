@@ -182,7 +182,7 @@ impl RepoTools {
             }
             "git_log" => {
                 let path = args.get("path").and_then(|v| v.as_str());
-                self.git_log(path, limit.min(50).max(1))
+                self.git_log(path, limit.clamp(1, 50))
             }
             other => Err(anyhow!("unknown tool `{other}`")),
         }

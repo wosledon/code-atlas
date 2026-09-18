@@ -54,15 +54,14 @@ pub fn claims_from_markdown(page: &str, md: &str) -> Vec<Claim> {
         if !in_claims {
             continue;
         }
-        if let Some(rest) = t.strip_prefix("- ").or_else(|| t.strip_prefix("* ")) {
-            if rest.len() >= 8 {
+        if let Some(rest) = t.strip_prefix("- ").or_else(|| t.strip_prefix("* "))
+            && rest.len() >= 8 {
                 out.push(Claim {
                     statement: rest.to_string(),
                     evidence: vec![format!("atlas://{page}")],
                     status: "active".into(),
                 });
             }
-        }
     }
     out
 }

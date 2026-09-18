@@ -43,11 +43,10 @@ pub(crate) fn resolve_page(atlas_root: &Path, rel: &str) -> Result<PathBuf> {
     if let (Ok(root_c), Ok(existing)) = (
         atlas_root.canonicalize(),
         nearest_existing(&joined).canonicalize(),
-    ) {
-        if !existing.starts_with(&root_c) {
+    )
+        && !existing.starts_with(&root_c) {
             bail!("page outside atlas root: {rel}");
         }
-    }
     Ok(joined)
 }
 

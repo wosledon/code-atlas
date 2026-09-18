@@ -10,37 +10,32 @@ pub fn extract_symbols(file: &SourceFile, source: &str) -> Vec<(String, String)>
         "rust" => {
             for line in source.lines() {
                 let t = line.trim();
-                if t.starts_with("pub fn ") || t.starts_with("pub struct ") || t.starts_with("pub enum ")
-                {
-                    if let Some(name) = after_keyword(t) {
+                if (t.starts_with("pub fn ") || t.starts_with("pub struct ") || t.starts_with("pub enum "))
+                    && let Some(name) = after_keyword(t) {
                         out.push((t.split_whitespace().nth(1).unwrap_or("").to_string(), name));
                     }
-                }
             }
         }
         "typescript" | "javascript" => {
             for line in source.lines() {
                 let t = line.trim();
-                if t.starts_with("export function ")
+                if (t.starts_with("export function ")
                     || t.starts_with("export class ")
                     || t.starts_with("export interface ")
                     || t.starts_with("export type ")
-                    || t.starts_with("export const ")
-                {
-                    if let Some(name) = after_keyword(t) {
+                    || t.starts_with("export const "))
+                    && let Some(name) = after_keyword(t) {
                         out.push((t.split_whitespace().nth(1).unwrap_or("").to_string(), name));
                     }
-                }
             }
         }
         "python" => {
             for line in source.lines() {
                 let t = line.trim();
-                if t.starts_with("def ") || t.starts_with("class ") {
-                    if let Some(name) = after_keyword(t) {
+                if (t.starts_with("def ") || t.starts_with("class "))
+                    && let Some(name) = after_keyword(t) {
                         out.push((t.split_whitespace().next().unwrap_or("").to_string(), name));
                     }
-                }
             }
         }
         _ => {}

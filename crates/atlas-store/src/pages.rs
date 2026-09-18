@@ -1,6 +1,7 @@
 use super::*;
 
 impl Store {
+    #[allow(clippy::too_many_arguments)]
     pub fn upsert_page(
         &self,
         path: &str,

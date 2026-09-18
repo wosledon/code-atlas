@@ -3,41 +3,30 @@ import {
   Alert,
   Box,
   Chip,
-  Collapse,
   Fab,
   IconButton,
-  List,
-  ListItemButton,
-  ListItemIcon,
-  ListItemText,
   Snackbar,
   Stack,
   Tooltip,
   Typography,
-  alpha,
 } from "@mui/material";
-import FolderOutlinedIcon from "@mui/icons-material/FolderOutlined";
-import DescriptionOutlinedIcon from "@mui/icons-material/DescriptionOutlined";
-import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
-import ChevronRightIcon from "@mui/icons-material/ChevronRight";
-import UnfoldLessIcon from "@mui/icons-material/UnfoldLess";
-import UnfoldMoreIcon from "@mui/icons-material/UnfoldMore";
 import LinkOutlinedIcon from "@mui/icons-material/LinkOutlined";
 import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
-import SubjectIcon from "@mui/icons-material/Subject";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../lib/api";
 import type { PageResponse, TreeResponse } from "../lib/api";
 import { useProject } from "../lib/projectContext";
 import { withProject } from "../lib/routes";
 import { MarkdownView, extractHeadings } from "../components/MarkdownView";
-
-type TreeNode = {
-  id: string;
-  name: string;
-  path?: string | null;
-  children: TreeNode[];
-};
+import { DocOutline, DocTreePanel } from "../components/reader/DocTreePanel";
+import {
+  ancestorsOf,
+  collectFolderIds,
+  countNodes,
+  defaultEntry,
+  encodePath,
+  type TreeNode,
+} from "../components/reader/treeUtils";
 
 export default function ReaderPage() {
   const [params, setParams] = useSearchParams();
@@ -74,7 +63,9 @@ export default function ReaderPage() {
     setActiveHeading(null);
     if (docRef.current) docRef.current.scrollTop = 0;
     try {
-      const res = await api<PageResponse>(withProject(`/api/pages/${encodePath(p)}`, projectRef.current));
+      const res = await api<PageResponse>(
+        withProject(`/api/pages/${encodePath(p)}`, projectRef.current)
+      );
       setContent(res.content);
       setErr(null);
     } catch (e) {
@@ -109,7 +100,6 @@ export default function ReaderPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params]);
 
-  // Track scroll for "back to top" and active outline item.
   useEffect(() => {
     const el = docRef.current;
     if (!el) return;
@@ -118,7 +108,9 @@ export default function ReaderPage() {
       const tops = headings
         .map((h) => {
           const node = el.querySelector(`#${CSS.escape(h.id)}`) as HTMLElement | null;
-          return node ? { id: h.id, top: node.getBoundingClientRect().top - el.getBoundingClientRect().top } : null;
+          return node
+            ? { id: h.id, top: node.getBoundingClientRect().top - el.getBoundingClientRect().top }
+            : null;
         })
         .filter(Boolean) as { id: string; top: number }[];
       let active: string | null = null;
@@ -135,7 +127,8 @@ export default function ReaderPage() {
   const scrollToHeading = (id: string) => {
     const el = docRef.current?.querySelector(`#${CSS.escape(id)}`) as HTMLElement | null;
     if (!el || !docRef.current) return;
-    const top = el.getBoundingClientRect().top - docRef.current.getBoundingClientRect().top + docRef.current.scrollTop - 16;
+    const top =
+      el.getBoundingClientRect().top - docRef.current.getBoundingClientRect().top + docRef.current.scrollTop - 16;
     docRef.current.scrollTo({ top, behavior: "smooth" });
     setActiveHeading(id);
   };
@@ -143,7 +136,15 @@ export default function ReaderPage() {
   const count = useMemo(() => countNodes(tree), [tree]);
 
   return (
-    <Box sx={{ height: { md: "100%" }, minHeight: 0, flexGrow: { md: 1 }, display: "flex", flexDirection: "column" }}>
+    <Box
+      sx={{
+        height: { md: "100%" },
+        minHeight: 0,
+        flexGrow: { md: 1 },
+        display: "flex",
+        flexDirection: "column",
+      }}
+    >
       <Box
         className="atlas-fade"
         sx={{
@@ -182,82 +183,19 @@ export default function ReaderPage() {
           py: { xs: 1.5, md: 2.5 },
         }}
       >
-        {/* floating tree card, pinned left */}
-        <Box
-          sx={{
-            width: { xs: "100%", md: 280 },
-            flexShrink: 0,
-            maxHeight: { xs: 300, md: "none" },
-            height: { md: "100%" },
-            minHeight: 0,
-            display: "flex",
-            flexDirection: "column",
-            borderRadius: 1.5,
-            bgcolor: "rgba(255,255,255,0.92)",
-            border: "1px solid rgba(228,233,240,0.9)",
-            boxShadow:
-              "0 1px 2px rgba(16,24,40,0.04), 0 12px 32px rgba(16,24,40,0.08), 0 2px 8px rgba(26,111,181,0.06)",
-            backdropFilter: "blur(12px)",
-            overflow: "hidden",
-          }}
-        >
-          <Box
-            sx={{
-              px: 1.5,
-              py: 1,
-              borderBottom: "1px solid",
-              borderColor: "divider",
-              flexShrink: 0,
-              display: "flex",
-              alignItems: "center",
-              gap: 0.75,
-            }}
-          >
-            <FolderOutlinedIcon fontSize="small" color="primary" />
-            <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-              目录
-            </Typography>
-            <Typography variant="caption" color="text.secondary">
-              {count}
-            </Typography>
-            <Box sx={{ ml: "auto" }}>
-              <Tooltip title={allOpen ? "全部折叠" : "全部展开"}>
-                <span>
-                  <IconButton
-                    size="small"
-                    disabled={!folderIds.length}
-                    onClick={() => {
-                      if (allOpen) {
-                        setExpanded({});
-                      } else {
-                        setExpanded(Object.fromEntries(folderIds.map((id) => [id, true])));
-                      }
-                    }}
-                  >
-                    {allOpen ? <UnfoldLessIcon fontSize="small" /> : <UnfoldMoreIcon fontSize="small" />}
-                  </IconButton>
-                </span>
-              </Tooltip>
-            </Box>
-          </Box>
-          <Box sx={{ flexGrow: 1, minHeight: 0, overflow: "auto", px: 1, py: 1 }}>
-            {tree ? (
-              <TreeView
-                node={tree}
-                expanded={expanded}
-                onToggle={(id) => setExpanded((e) => ({ ...e, [id]: !e[id] }))}
-                onSelect={loadPage}
-                selected={current}
-              />
-            ) : (
-              <Typography color="text.secondary" sx={{ px: 1.5, py: 1 }}>
-                加载目录…
-              </Typography>
-            )}
-          </Box>
-        </Box>
+        <DocTreePanel
+          tree={tree}
+          count={count}
+          folderIds={folderIds}
+          expanded={expanded}
+          allOpen={allOpen}
+          current={current}
+          onToggle={(id) => setExpanded((e) => ({ ...e, [id]: !e[id] }))}
+          onSelect={loadPage}
+          onExpandAll={() => setExpanded(Object.fromEntries(folderIds.map((id) => [id, true])))}
+          onCollapseAll={() => setExpanded({})}
+        />
 
-        {/* document pane */}
         <Box
           ref={docRef}
           sx={{
@@ -321,75 +259,8 @@ export default function ReaderPage() {
           )}
         </Box>
 
-        {/* outline card, pinned right */}
         {headings.length > 0 && (
-          <Box
-            sx={{
-              display: { xs: "none", lg: "flex" },
-              width: 240,
-              flexShrink: 0,
-              height: "100%",
-              minHeight: 0,
-              flexDirection: "column",
-              borderRadius: 1.5,
-              bgcolor: "rgba(255,255,255,0.92)",
-              border: "1px solid rgba(228,233,240,0.9)",
-              boxShadow:
-                "0 1px 2px rgba(16,24,40,0.04), 0 12px 32px rgba(16,24,40,0.08)",
-              backdropFilter: "blur(12px)",
-              overflow: "hidden",
-            }}
-          >
-            <Box
-              sx={{
-                px: 1.5,
-                py: 1,
-                borderBottom: "1px solid",
-                borderColor: "divider",
-                display: "flex",
-                alignItems: "center",
-                gap: 0.75,
-                flexShrink: 0,
-              }}
-            >
-              <SubjectIcon fontSize="small" color="primary" />
-              <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-                本页目录
-              </Typography>
-            </Box>
-            <Box sx={{ flexGrow: 1, minHeight: 0, overflow: "auto", px: 1, py: 1 }}>
-              {headings.map((h) => {
-                const active = activeHeading === h.id;
-                return (
-                  <ListItemButton
-                    key={h.id}
-                    dense
-                    onClick={() => scrollToHeading(h.id)}
-                    sx={{
-                      borderRadius: 1,
-                      pl: 1 + (h.level - 1) * 1.25,
-                      py: 0.25,
-                      bgcolor: active ? alpha("#1A6FB5", 0.1) : "transparent",
-                      color: active ? "primary.dark" : "text.primary",
-                      borderLeft: active ? "2px solid" : "2px solid transparent",
-                      borderColor: active ? "primary.main" : "transparent",
-                      "&:hover": { bgcolor: alpha("#1A6FB5", 0.06) },
-                    }}
-                  >
-                    <ListItemText
-                      primary={h.text}
-                      primaryTypographyProps={{
-                        fontSize: h.level <= 2 ? 13 : 12.5,
-                        fontWeight: h.level <= 2 ? 700 : 500,
-                        color: h.level >= 3 ? "text.secondary" : "inherit",
-                        noWrap: true,
-                      }}
-                    />
-                  </ListItemButton>
-                );
-              })}
-            </Box>
-          </Box>
+          <DocOutline headings={headings} activeHeading={activeHeading} onSelect={scrollToHeading} />
         )}
       </Box>
       <Snackbar
@@ -399,159 +270,5 @@ export default function ReaderPage() {
         message="已复制页面链接"
       />
     </Box>
-  );
-}
-
-// Percent-encode each path segment while keeping `/` separators, so Chinese file
-// names and spaces survive the trip through `/api/pages/{*path}`.
-function encodePath(p: string): string {
-  return p
-    .split("/")
-    .map((seg) => encodeURIComponent(seg))
-    .join("/");
-}
-
-// Collect the folder ids on the path to `path` so the tree reveals a deep-linked page.
-function ancestorsOf(
-  node: TreeNode | null,
-  path: string,
-  chain: string[] = []
-): Record<string, boolean> {
-  if (!node) return {};
-  if (node.path === path) return Object.fromEntries(chain.map((id) => [id, true]));
-  const nextChain = node.path ? chain : [...chain, node.id];
-  for (const child of node.children || []) {
-    const found = ancestorsOf(child, path, nextChain);
-    if (Object.keys(found).length > 0) return found;
-  }
-  return {};
-}
-
-function countNodes(n: TreeNode | null): number {
-  if (!n) return 0;
-  let c = n.path ? 1 : 0;
-  for (const ch of n.children || []) c += countNodes(ch);
-  return c;
-}
-
-function collectFolderIds(n: TreeNode | null, out: string[] = []): string[] {
-  if (!n) return out;
-  if (!n.path && n.children?.length) out.push(n.id);
-  for (const ch of n.children || []) collectFolderIds(ch, out);
-  return out;
-}
-
-function basename(p: string): string {
-  const parts = p.split("/");
-  return parts[parts.length - 1] || p;
-}
-
-// Depth-first walk in display order, so "the first markdown file" is predictable.
-function collectFiles(node: TreeNode | null, out: string[] = []): string[] {
-  if (!node) return out;
-  if (node.path) out.push(node.path);
-  for (const ch of node.children || []) collectFiles(ch, out);
-  return out;
-}
-
-// quickstart.md → README.md → first markdown file → first file of any kind.
-function defaultEntry(tree: TreeNode | null): string | null {
-  const files = collectFiles(tree);
-  if (files.length === 0) return null;
-  const named = (name: string) =>
-    files.find((f) => basename(f).toLowerCase() === name.toLowerCase());
-  return (
-    named("quickstart.md") ||
-    named("readme.md") ||
-    files.find((f) => /\.(md|markdown)$/i.test(f)) ||
-    files[0]
-  );
-}
-
-function TreeView({
-  node,
-  expanded,
-  onToggle,
-  onSelect,
-  selected,
-  depth = 0,
-}: {
-  node: TreeNode;
-  expanded: Record<string, boolean>;
-  onToggle: (id: string) => void;
-  onSelect: (path: string) => void;
-  selected: string | null;
-  depth?: number;
-}) {
-  if (node.path) {
-    return (
-      <ListItemButton
-        dense
-        selected={selected === node.path}
-        onClick={() => onSelect(node.path!)}
-        sx={{
-          pl: 1 + depth * 1.5,
-          borderRadius: 1.5,
-          "&.Mui-selected": {
-            bgcolor: alpha("#1A6FB5", 0.1),
-            color: "primary.dark",
-            fontWeight: 600,
-          },
-        }}
-      >
-        <ListItemIcon sx={{ minWidth: 28 }}>
-          <DescriptionOutlinedIcon fontSize="small" color="action" />
-        </ListItemIcon>
-        <ListItemText
-          primary={node.name}
-          primaryTypographyProps={{ fontSize: 13.5, fontWeight: selected === node.path ? 700 : 500 }}
-        />
-      </ListItemButton>
-    );
-  }
-
-  const open = expanded[node.id] ?? depth < 2;
-  return (
-    <>
-      <ListItemButton
-        dense
-        onClick={() => onToggle(node.id)}
-        sx={{ pl: 1 + depth * 1.5, borderRadius: 1.5 }}
-      >
-        <ListItemIcon sx={{ minWidth: 28 }}>
-          {open ? <ExpandMoreIcon fontSize="small" /> : <ChevronRightIcon fontSize="small" />}
-        </ListItemIcon>
-        <ListItemIcon sx={{ minWidth: 24 }}>
-          <FolderOutlinedIcon fontSize="small" color="primary" />
-        </ListItemIcon>
-        <ListItemText
-          primary={node.name}
-          primaryTypographyProps={{ fontSize: 13.5, fontWeight: 700 }}
-        />
-      </ListItemButton>
-      <Collapse in={open} timeout="auto" unmountOnExit>
-        <List disablePadding>
-          {(node.children || [])
-            .slice()
-            .sort((a, b) => {
-              const af = a.path ? 1 : 0;
-              const bf = b.path ? 1 : 0;
-              if (af !== bf) return af - bf;
-              return a.name.localeCompare(b.name);
-            })
-            .map((ch) => (
-              <TreeView
-                key={ch.id}
-                node={ch}
-                expanded={expanded}
-                onToggle={onToggle}
-                onSelect={onSelect}
-                selected={selected}
-                depth={depth + 1}
-              />
-            ))}
-        </List>
-      </Collapse>
-    </>
   );
 }

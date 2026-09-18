@@ -56,3 +56,7 @@ pub use plan::{preview_plan, PlannedPage};
 pub use progress::with_suspended_bars;
 pub use run::run_init_or_update;
 pub use types::{LastUpdate, PipelineCtx, RunResult};
+
+// Re-export for integration-style tests inside the crate.
+#[allow(unused_imports)]
+pub(crate) use evidence::build_evidence;

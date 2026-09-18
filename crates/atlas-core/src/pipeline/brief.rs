@@ -188,16 +188,14 @@ pub(crate) fn depth_gaps(body: &str, page: &PlannedPage) -> Vec<String> {
                 gaps.push("Module 页必须有上手要点（先读哪些文件、第一个改动建议）".into());
             }
         }
-        "Business" => {
-            if !body.contains("术语") && !body.contains("Glossary") {
+        "Business"
+            if !body.contains("术语") && !body.contains("Glossary") => {
                 gaps.push("Business 页需要领域术语表（术语 → 含义 → 代码映射）".into());
             }
-        }
-        "Workflow" => {
-            if !body.contains("```mermaid") {
+        "Workflow"
+            if !body.contains("```mermaid") => {
                 gaps.push("Workflow 页必须包含分阶段 mermaid 图".into());
             }
-        }
         _ => {}
     }
     if count_lines_starting_with(body, '|') < 3 {

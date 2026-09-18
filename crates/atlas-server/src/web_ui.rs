@@ -51,7 +51,7 @@ pub(crate) async fn serve_embedded(
         let spa_fallback = path != "index.html" && !path.starts_with("assets/");
         let lookup = if spa_fallback { "index.html" } else { path };
         let file = Assets::get(lookup).or_else(|| Assets::get("index.html"));
-        return match file {
+        match file {
             Some(f) => {
                 let accepts_gzip = headers
                     .get(header::ACCEPT_ENCODING)
@@ -99,7 +99,7 @@ pub(crate) async fn serve_embedded(
                 resp
             }
             None => (StatusCode::NOT_FOUND, "not found").into_response(),
-        };
+        }
     }
     #[cfg(not(embedded_ui))]
     {

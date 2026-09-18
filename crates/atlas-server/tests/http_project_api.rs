@@ -15,10 +15,10 @@ fn temp_dir(tag: &str) -> PathBuf {
     p
 }
 
-fn test_app(launch: &PathBuf) -> axum::Router {
+fn test_app(launch: &std::path::Path) -> axum::Router {
     let reg = ProjectRegistry::load_with_registry_path(launch, launch.join("test.registry.json"));
     let cfg = AtlasConfig::default();
-    let state = build_state_with_registry(launch.clone(), cfg, "test-token".into(), reg);
+    let state = build_state_with_registry(launch.to_path_buf(), cfg, "test-token".into(), reg);
     build_api_router(state)
 }
 

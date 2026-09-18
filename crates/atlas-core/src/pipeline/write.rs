@@ -107,11 +107,10 @@ impl PageDraft {
                 }
             }
             None => {
-                if let Err(e) = std::fs::remove_file(&self.path) {
-                    if e.kind() != std::io::ErrorKind::NotFound {
+                if let Err(e) = std::fs::remove_file(&self.path)
+                    && e.kind() != std::io::ErrorKind::NotFound {
                         tracing::warn!("清理草稿 {} 失败: {e:#}", self.path.display());
                     }
-                }
             }
         }
     }

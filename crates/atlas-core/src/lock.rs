@@ -93,8 +93,8 @@ struct LockHolder {
 
 fn read_lock_holder(path: &Path, heartbeat: &Path) -> Option<LockHolder> {
     let mut pid = 0u32;
-    if path.exists() {
-        if let Ok(text) = fs::read_to_string(path) {
+    if path.exists()
+        && let Ok(text) = fs::read_to_string(path) {
             // {"pid":123,"run_id":"..."}
             if let Some(i) = text.find("\"pid\":") {
                 let rest = &text[i + 6..];
@@ -102,7 +102,6 @@ fn read_lock_holder(path: &Path, heartbeat: &Path) -> Option<LockHolder> {
                 pid = num.parse().unwrap_or(0);
             }
         }
-    }
     let run_id = fs::read_to_string(heartbeat)
         .ok()
         .map(|s| s.trim().to_string())

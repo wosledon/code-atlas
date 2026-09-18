@@ -238,7 +238,7 @@ pub(crate) async fn kb_chat(
         let _ = tx.send(emit(frame)).await;
     });
 
-    let stream = ReceiverStream::new(rx).map(|chunk| Ok::<_, std::convert::Infallible>(chunk));
+    let stream = ReceiverStream::new(rx).map(Ok::<_, std::convert::Infallible>);
     Response::builder()
         .status(StatusCode::OK)
         .header("content-type", "text/event-stream")

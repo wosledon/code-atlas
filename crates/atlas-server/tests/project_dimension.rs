@@ -45,7 +45,7 @@ fn discovery_from_external_marker_supports_project_dimension_update() {
     write_project_marker(&data, &target).unwrap();
 
     let mut reg = test_registry(&launch);
-    let found = reg.discover_from_bases(&[external.clone()]);
+    let found = reg.discover_from_bases(std::slice::from_ref(&external));
     assert_eq!(found.len(), 1);
     let pref = reg.resolve(Some(&repo_slug(&target))).unwrap();
     assert_eq!(pref.root, target);

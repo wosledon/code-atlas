@@ -154,8 +154,8 @@ pub(crate) fn detect_code_modules(scan: &RepoScan) -> Vec<(String, String, Strin
 pub(crate) fn derive_modules(scan: &RepoScan) -> Vec<(String, String)> {
     let mut map = std::collections::BTreeMap::new();
     for f in &scan.files {
-        if let Some(lang) = &f.language {
-            if matches!(lang.as_str(), "rust" | "typescript" | "python") {
+        if let Some(lang) = &f.language
+            && matches!(lang.as_str(), "rust" | "typescript" | "python") {
                 let top = f
                     .rel
                     .split('/')
@@ -166,7 +166,6 @@ pub(crate) fn derive_modules(scan: &RepoScan) -> Vec<(String, String)> {
                     map.entry(top.clone()).or_insert(f.rel.clone());
                 }
             }
-        }
     }
     map.into_iter().collect()
 }

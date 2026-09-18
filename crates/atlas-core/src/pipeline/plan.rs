@@ -21,6 +21,7 @@ pub fn preview_plan(repo_root: &Path, instruction: Option<&str>) -> Result<Vec<P
 /// 文档树面向「接手代码库」：业务/设计/模块/数据/接口/流程/运维
 pub(crate) fn plan_pages(scan: &RepoScan, mode: &str, instruction: Option<&str>) -> Vec<PlannedPage> {
     let mut pages: Vec<PlannedPage> = Vec::new();
+    #[allow(clippy::too_many_arguments)]
     fn add(
         pages: &mut Vec<PlannedPage>,
         rel: &str,

@@ -109,7 +109,7 @@ fn polluted_bodies_fail_quality_gate() {
     use super::quality::is_polluted;
     let dirty = "## 职责\n\n<function=read_file>\nkeep\n</function>\n\n## Claims\n- x\n";
     assert!(is_polluted(dirty));
-    let gaps = super::brief::depth_gaps(&dirty, &demo_page());
+    let gaps = super::brief::depth_gaps(dirty, &demo_page());
     assert!(gaps.iter().any(|g| g.contains("工具调用残片")), "{gaps:?}");
     let cleaned = super::quality::sanitize_generated_body(dirty);
     assert!(!is_polluted(&cleaned));

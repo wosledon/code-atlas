@@ -35,10 +35,8 @@ fn dir_guess(dir: &str) -> &'static str {
 pub(crate) fn template_page_body(scan: &RepoScan, page: &PlannedPage, cfg: &AtlasConfig) -> String {
     let mut body = String::new();
     body.push_str(&format!("# {}\n\n", page.title));
-    body.push_str(&format!(
-        "> ⚠️ 模板模式：未检测到可用的 LLM，本页由结构扫描生成，仅覆盖可自动提取的事实。\
-         配置 `[llm]` 后重新运行 `atlas update` 可获得完整讲解。\n\n"
-    ));
+    body.push_str("> ⚠️ 模板模式：未检测到可用的 LLM，本页由结构扫描生成，仅覆盖可自动提取的事实。\
+         配置 `[llm]` 后重新运行 `atlas update` 可获得完整讲解。\n\n");
     body.push_str(&format!(
         "- 仓库根：`{}`\n- 源文件：{} 个\n- 语言：{}\n- 输出语言：{}\n\n",
         scan.root.display(),

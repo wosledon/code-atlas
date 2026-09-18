@@ -13,6 +13,7 @@ pub use sections::{
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct AtlasConfig {
     #[serde(default)]
     pub llm: LlmSection,
@@ -28,18 +29,6 @@ pub struct AtlasConfig {
     pub analyze: AnalyzeSection,
 }
 
-impl Default for AtlasConfig {
-    fn default() -> Self {
-        Self {
-            llm: LlmSection::default(),
-            privacy: PrivacySection::default(),
-            graph: GraphSection::default(),
-            kb: KbSection::default(),
-            output: OutputSection::default(),
-            analyze: AnalyzeSection::default(),
-        }
-    }
-}
 
 impl AtlasConfig {
     pub fn load(repo_root: &Path) -> Result<Self> {

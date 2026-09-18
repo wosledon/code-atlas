@@ -136,21 +136,19 @@ impl StreamAccum {
             emit_round_end(false);
         }
         let slot = self.tools.entry(idx).or_default();
-        if let Some(id) = &tc.id {
-            if !id.is_empty() {
+        if let Some(id) = &tc.id
+            && !id.is_empty() {
                 slot.id = id.clone();
             }
-        }
         if let Some(f) = &tc.function {
-            if let Some(n) = &f.name {
-                if !n.is_empty() {
+            if let Some(n) = &f.name
+                && !n.is_empty() {
                     if slot.name.is_empty() {
                         slot.name = n.clone();
                     } else {
                         slot.name.push_str(n);
                     }
                 }
-            }
             if let Some(a) = &f.arguments {
                 slot.arguments.push_str(a);
             }

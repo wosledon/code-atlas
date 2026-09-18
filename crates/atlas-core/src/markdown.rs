@@ -20,7 +20,7 @@ impl FrontMatter {
         fields.insert("description".into(), description.into());
         fields.insert(
             "tags".into(),
-            format!("[{}]", tags.iter().map(|t| format!("{t}")).collect::<Vec<_>>().join(", ")),
+            format!("[{}]", tags.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", ")),
         );
         Self { fields }
     }

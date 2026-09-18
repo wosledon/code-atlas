@@ -1,38 +1,20 @@
+//! Code Atlas CLI — clap entry and command dispatch.
+
+mod fsutil;
+mod logging;
+mod project_cmd;
+mod target;
+
 use anyhow::Result;
-use atlas_core::projects::ProjectRegistry;
 use atlas_core::{pipeline, AtlasConfig};
 use clap::{Parser, Subcommand};
-use std::io::{IsTerminal, Write};
-use std::path::{Path, PathBuf};
-use tracing_subscriber::fmt::MakeWriter;
+use std::io::IsTerminal;
+use std::path::PathBuf;
 
-/// Logs are written to stderr **with the progress bars parked first**, so a log
-/// line never lands in the middle of a bar redraw. stdout stays reserved for a
-/// command's actual output.
-#[derive(Clone, Copy)]
-struct ProgressAwareStderr;
-
-impl<'a> MakeWriter<'a> for ProgressAwareStderr {
-    type Writer = ProgressAwareStderr;
-    fn make_writer(&'a self) -> Self::Writer {
-        *self
-    }
-}
-
-impl Write for ProgressAwareStderr {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        pipeline::with_suspended_bars(|| {
-            let mut err = std::io::stderr().lock();
-            err.write_all(buf)?;
-            err.flush()?;
-            Ok(buf.len())
-        })
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        pipeline::with_suspended_bars(|| std::io::stderr().flush())
-    }
-}
+use crate::fsutil::{copy_dir, resolve_web_dist};
+use crate::logging::ProgressAwareStderr;
+use crate::project_cmd::{run_project_cmd, ProjectCmd};
+use crate::target::{apply_overrides, print_result, resolve_target};
 
 #[derive(Parser, Debug)]
 #[command(name = "atlas", version, about = "Code Atlas — living wiki, knowledge graph & KB")]
@@ -127,75 +109,6 @@ enum Cmd {
     Mcp,
 }
 
-#[derive(Subcommand, Debug)]
-enum ProjectCmd {
-    /// List launch project + registered / discovered projects
-    List,
-    /// Register a repository root in atlas.projects.json (next to the atlas executable)
-    Add {
-        root: PathBuf,
-        #[arg(long)]
-        id: Option<String>,
-        #[arg(long)]
-        name: Option<String>,
-    },
-    /// Remove a registered project (launch project cannot be removed)
-    Remove { id: String },
-    /// Scan external_root markers and merge new projects into the registry
-    Discover,
-}
-
-struct ProjectTarget {
-    id: String,
-    repo_root: PathBuf,
-    cfg: AtlasConfig,
-}
-
-fn resolve_target(launch_root: &Path, project: Option<&str>) -> Result<ProjectTarget> {
-    let raw = project.map(str::trim).unwrap_or("");
-    let launch_cfg = AtlasConfig::load(launch_root)?;
-    if raw.is_empty() || raw == "default" {
-        return Ok(ProjectTarget {
-            id: atlas_core::repo_slug(launch_root),
-            repo_root: launch_root.to_path_buf(),
-            cfg: launch_cfg,
-        });
-    }
-    let reg = ProjectRegistry::load_with_discovery(launch_root);
-    let pref = reg.resolve(Some(raw))?;
-    Ok(ProjectTarget {
-        id: pref.id,
-        repo_root: pref.root,
-        cfg: pref.cfg,
-    })
-}
-
-fn apply_overrides(cfg: &mut AtlasConfig, provider: Option<String>, model: Option<String>) {
-    if let Some(p) = provider {
-        cfg.llm.provider = p;
-    }
-    if let Some(m) = model {
-        cfg.llm.model = m;
-    }
-}
-
-fn print_result(res: &pipeline::RunResult, project: &str, ci: bool) {
-    let mut v = serde_json::to_value(res).unwrap_or_default();
-    if let Some(obj) = v.as_object_mut() {
-        obj.insert("project".into(), project.into());
-    }
-    println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
-    if !ci {
-        return;
-    }
-    // CI: fail the step on a failed run or on structural problems, while
-    // tolerating advisory notes (e.g. template fallback without an LLM key).
-    let hard_problem = res.notes.iter().any(|n| n.starts_with("problem:"));
-    if res.status == "failed" || hard_problem {
-        std::process::exit(1);
-    }
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -216,66 +129,9 @@ async fn main() -> Result<()> {
             let p = atlas_core::write_config_file(&launch_root, name, force)?;
             println!("wrote {}", p.display());
         }
-        Cmd::Project { cmd } => match cmd {
-            ProjectCmd::List => {
-                let mut reg = ProjectRegistry::load_with_discovery(&launch_root);
-                let discovered = reg.discover_projects();
-                if !discovered.is_empty() {
-                    eprintln!("discovered {} project(s) from external_root", discovered.len());
-                }
-                let list = reg.list();
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({
-                        "launch": reg.launch_id(),
-                        "registry_path": reg.registry_path().display().to_string(),
-                        "projects": list.iter().map(|p| serde_json::json!({
-                            "id": p.id,
-                            "name": p.name,
-                            "root": p.root.display().to_string(),
-                            "atlas_root": p.atlas_root.display().to_string(),
-                            "is_launch": p.is_launch,
-                        })).collect::<Vec<_>>(),
-                    }))?
-                );
-            }
-            ProjectCmd::Add { root, id, name } => {
-                let mut reg = ProjectRegistry::load_with_discovery(&launch_root);
-                let pref = reg.register(&root, id.as_deref(), name.as_deref())?;
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({
-                        "id": pref.id,
-                        "name": pref.name,
-                        "root": pref.root.display().to_string(),
-                        "registry_path": reg.registry_path().display().to_string(),
-                    }))?
-                );
-            }
-            ProjectCmd::Remove { id } => {
-                let mut reg = ProjectRegistry::load_with_discovery(&launch_root);
-                reg.unregister(&id)?;
-                println!("removed project `{id}`");
-            }
-            ProjectCmd::Discover => {
-                let mut reg = ProjectRegistry::load_with_discovery(&launch_root);
-                let found = reg.discover_projects();
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({
-                        "discovered": found.iter().map(|e| serde_json::json!({
-                            "id": e.id,
-                            "root": e.root,
-                        })).collect::<Vec<_>>(),
-                        "projects": reg.list().iter().map(|p| p.id.clone()).collect::<Vec<_>>(),
-                    }))?
-                );
-            }
-        },
+        Cmd::Project { cmd } => run_project_cmd(&launch_root, cmd)?,
         Cmd::Mcp => {
-            let mut cfg = AtlasConfig::load(&launch_root)?;
-            // MCP project resolution uses the registry; launch cfg is the fallback.
-            apply_overrides(&mut cfg, None, None);
+            let cfg = AtlasConfig::load(&launch_root)?;
             atlas_server::mcp::serve_stdio(launch_root, cfg).await?;
         }
         Cmd::Init { ci, instruction, provider, model } => {
@@ -380,48 +236,6 @@ async fn main() -> Result<()> {
                 }
                 std::process::exit(1);
             }
-        }
-    }
-    Ok(())
-}
-
-/// Locate the SPA build so `atlas web` works without extra setup.
-/// Prefer an explicit `--web-dist`, then the target repo, then paths next to the binary
-/// (covers `cargo build -p atlas-cli` from a source checkout and a simple install layout).
-fn resolve_web_dist(explicit: Option<&std::path::Path>, repo_root: &std::path::Path) -> Option<PathBuf> {
-    if let Some(d) = explicit {
-        return d.join("index.html").exists().then(|| d.to_path_buf());
-    }
-    let mut candidates: Vec<PathBuf> = vec![repo_root.join("web/dist")];
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            candidates.extend([
-                dir.join("web/dist"),
-                dir.join("../web/dist"),
-                dir.join("../../web/dist"),
-                dir.join("../../../web/dist"),
-            ]);
-        }
-    }
-    candidates
-        .into_iter()
-        .find(|d| d.join("index.html").exists())
-}
-
-fn copy_dir(src: &std::path::Path, dst: &std::path::Path) -> Result<()> {
-    if !src.exists() {
-        anyhow::bail!("wiki root missing: {}", src.display());
-    }
-    for entry in walkdir::WalkDir::new(src).into_iter().filter_map(|e| e.ok()) {
-        let rel = entry.path().strip_prefix(src).unwrap_or(entry.path());
-        let target = dst.join(rel);
-        if entry.file_type().is_dir() {
-            std::fs::create_dir_all(&target)?;
-        } else {
-            if let Some(p) = target.parent() {
-                std::fs::create_dir_all(p)?;
-            }
-            std::fs::copy(entry.path(), &target)?;
         }
     }
     Ok(())
