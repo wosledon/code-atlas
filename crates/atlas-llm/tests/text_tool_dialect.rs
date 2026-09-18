@@ -83,6 +83,36 @@ fn fake_server(replies: Vec<Vec<Part>>, seen: Arc<Mutex<Vec<String>>>) -> String
     format!("http://{addr}/v1")
 }
 
+/// Same, but the reply is computed from the request body (and its index): lets a
+/// test make the model react to what the client sent — a corrective instruction,
+/// for example.
+fn scripted_server<F>(script: F, seen: Arc<Mutex<Vec<String>>>) -> String
+where
+    F: Fn(&str, usize) -> Vec<Part> + Send + 'static,
+{
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake llm");
+    let addr = listener.local_addr().expect("addr");
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { break };
+            let request = read_request(&mut stream);
+            let index = {
+                let mut seen = seen.lock().expect("seen");
+                let index = seen.len();
+                seen.push(request);
+                index
+            };
+            let parts = {
+                let seen = seen.lock().expect("seen");
+                script(&seen[index], index)
+            };
+            let _ = stream.write_all(&sse_response(&parts));
+            let _ = stream.flush();
+        }
+    });
+    format!("http://{addr}/v1")
+}
+
 fn read_request(stream: &mut std::net::TcpStream) -> String {
     let mut buf: Vec<u8> = Vec::new();
     let mut chunk = [0u8; 4096];
@@ -272,25 +302,62 @@ async fn reads_without_writing_stop_at_the_read_budget() {
     assert!(!resp.text.contains("<tool_call"), "{}", resp.text);
 
     let requests = seen.lock().expect("seen");
-    // 3 次执行 + 2 次「预算已用尽」+ 1 轮重复（没有新调用）+ 1 轮收尾。
-    assert_eq!(requests.len(), 7);
-    // 第 4 轮（index 3）的调用被拒，拒绝文本从第 5 个请求起随历史上的问答一起发出。
+    // 3 次执行 + 2 次「预算已用尽」+ 2 轮无进展（注入提示词）+ 1 轮收尾。
+    assert_eq!(requests.len(), 8);
+    // 第 4 轮的调用被拒，拒绝文本从下一个请求起随历史上的问答一起发出。
     let refusal = &requests[4];
     assert!(
         refusal.contains("工具调用预算已用尽") && refusal.contains("直接输出页面 markdown 正文"),
         "the model must be told why the call was refused and what to do: {refusal}"
     );
     assert_eq!(
-        requests[6].matches("pub fn main()").count(),
+        requests[7].matches("pub fn main()").count(),
         3,
         "past the budget nothing is executed: {}",
-        requests[6]
+        requests[7]
     );
 }
 
-/// 假死循环：模型反复要**同一个**文件、正文也原地重复。
-/// 重复调用不执行（结果就在上文的工具消息里），连续两轮没有新内容就收尾，
-/// 不会把预算耗在重复上。
+/// 模型卡住时先自救：重复的同一轮不会立刻结束本页，而是往对话里注入纠偏提示，
+/// 模型据此换做法就能把页面写完——这正是「改提示词恢复」而不是「直接截断」。
+#[tokio::test]
+async fn a_stuck_model_recovers_after_the_nudge() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let llm = client(scripted_server(
+        // 一直原地重复，直到请求里出现纠偏提示才写正文（证明是提示词救了它）。
+        |request: &str, _round: usize| {
+            if request.contains("系统提示") {
+                vec![Part::Text("## 职责\n\n纠偏后写出的正文。\n".into())]
+            } else {
+                prose_then_call("## 职责\n\n正文。", "crates/x.rs")
+            }
+        },
+        seen.clone(),
+    ));
+    let (ran, exec) = recorder();
+
+    let resp = llm
+        .chat_with_tools("system", "user", &[read_file_spec()], 2, exec)
+        .await
+        .expect("chat_with_tools");
+
+    assert_eq!(ran.lock().expect("ran").len(), 1, "重复调用只执行一次");
+    assert!(
+        resp.text.contains("纠偏后写出的正文"),
+        "the page must be finished after the nudge: {}",
+        resp.text
+    );
+    let requests = seen.lock().expect("seen");
+    assert!(
+        requests[2].contains("系统提示"),
+        "the request after the stuck round carries the corrective instruction: {}",
+        requests[2]
+    );
+    assert_eq!(requests.len(), 3, "读一次 → 纠偏 → 写完");
+}
+
+/// 假死循环：模型反复要**同一个**文件、正文也原地重复，且对纠偏毫无反应。
+/// 重复调用不执行（结果就在上文的工具消息里），两次纠偏无效后才收尾。
 #[tokio::test]
 async fn repeated_identical_rounds_stop_the_loop() {
     let seen = Arc::new(Mutex::new(Vec::new()));
@@ -311,11 +378,15 @@ async fn repeated_identical_rounds_stop_the_loop() {
         "the same call runs once, not once per round"
     );
     let requests = seen.lock().expect("seen");
-    assert_eq!(requests.len(), 3, "1 次执行 + 2 轮无进展即收尾");
+    assert_eq!(requests.len(), 4, "1 次执行 + 2 次纠偏 + 1 轮收尾");
     assert!(
         requests[2].contains("不会重复执行"),
         "the model is told the call is a repeat: {}",
         requests[2]
+    );
+    assert!(
+        requests[2].contains("系统提示") && requests[3].contains("系统提示"),
+        "each stuck round injects a corrective instruction"
     );
     assert!(resp.text.contains("正文。"), "{}", resp.text);
     assert_eq!(resp.text.matches("正文。").count(), 1, "{}", resp.text);

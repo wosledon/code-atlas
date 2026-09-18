@@ -7,6 +7,7 @@
 //! - `providers`：OpenAI 兼容接口与 Anthropic Messages 接口的单轮请求。
 
 use anyhow::{Result, anyhow};
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::types::{LlmConfig, LlmResponse};
@@ -24,6 +25,11 @@ pub struct LlmClient {
     cfg: LlmConfig,
     api_key: Option<String>,
     http: reqwest::Client,
+    /// Prompt tokens the provider reported, and how many of them it served from
+    /// its prompt cache. Both are process-local totals for this client, which is
+    /// built once per run, so they answer "is the stable prefix being reused?".
+    prompt_tokens: AtomicI64,
+    cached_tokens: AtomicI64,
 }
 
 /// Environment variables that can carry the API key of a provider, in the order
@@ -50,7 +56,32 @@ impl LlmClient {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(cfg.timeout_secs))
             .build()?;
-        Ok(Self { cfg, api_key, http })
+        Ok(Self {
+            cfg,
+            api_key,
+            http,
+            prompt_tokens: AtomicI64::new(0),
+            cached_tokens: AtomicI64::new(0),
+        })
+    }
+
+    /// `(prompt tokens seen, of which served from the provider's prompt cache)`
+    /// over this client's lifetime. The client is built once per run, so these
+    /// are run totals; providers that do not report cache details leave the
+    /// second number at zero, which is also the honest answer for them.
+    pub fn prompt_cache_totals(&self) -> (i64, i64) {
+        (
+            self.prompt_tokens.load(Ordering::Relaxed),
+            self.cached_tokens.load(Ordering::Relaxed),
+        )
+    }
+
+    /// Add one turn's usage to the client totals.
+    pub(super) fn account(&self, turn: &crate::types::LlmTurn) {
+        self.prompt_tokens
+            .fetch_add(turn.usage.prompt_tokens, Ordering::Relaxed);
+        self.cached_tokens
+            .fetch_add(turn.cached_tokens, Ordering::Relaxed);
     }
 
     pub fn model(&self) -> &str {

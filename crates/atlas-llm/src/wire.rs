@@ -135,6 +135,25 @@ pub(crate) struct MessageBody {
 pub(crate) struct UsageBody {
     pub(crate) prompt_tokens: Option<i64>,
     pub(crate) completion_tokens: Option<i64>,
+    /// Providers that cache the prompt prefix report how much of it they served
+    /// from cache (OpenAI-compatible: `prompt_tokens_details.cached_tokens`).
+    #[serde(default)]
+    pub(crate) prompt_tokens_details: Option<PromptTokensDetails>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct PromptTokensDetails {
+    pub(crate) cached_tokens: Option<i64>,
+}
+
+impl UsageBody {
+    /// Prompt tokens the provider did not have to re-read.
+    pub(crate) fn cached_tokens(&self) -> i64 {
+        self.prompt_tokens_details
+            .as_ref()
+            .and_then(|d| d.cached_tokens)
+            .unwrap_or(0)
+    }
 }
 
 #[cfg(test)]

@@ -47,14 +47,16 @@ fn evidence_bundles_dependencies_commands_and_symbol_outline() {
     let page = demo_page();
     let evidence = build_evidence(&scan, &page);
 
+    // 顺序即缓存：跨页共享的段（仓库、清单、命令、模块、wiki 目录）必须排在
+    // 页级内容（scope 文件清单、符号骨架）之前，供应商缓存前缀才能覆盖到它们。
     let sections = [
         "## Repository",
         "## Manifests & declared dependencies",
         "## Commands that exist in this repository",
         "## Modules discovered",
+        "## Documents this wiki will contain",
         "## Source files in scope",
         "## Source outline (declarations with line numbers)",
-        "## Documents this wiki will contain",
     ];
     let mut cursor = 0usize;
     for section in sections {

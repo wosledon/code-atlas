@@ -50,7 +50,13 @@ impl LlmClient {
         let mut last: Option<anyhow::Error> = None;
         for attempt in 0..=self.cfg.retries {
             match self.post_chat_once(messages, tools, elapsed).await {
-                Ok(turn) => return Ok(turn),
+                Ok(turn) => {
+                    // Single choke point for OpenAI-compatible traffic (plain
+                    // chats and tool rounds alike): every turn's prompt/cache
+                    // numbers land in the run totals here.
+                    self.account(&turn);
+                    return Ok(turn);
+                }
                 Err(Attempt::Fatal(e)) => return Err(e),
                 Err(Attempt::Transient(e)) => {
                     tracing::warn!("llm 请求失败（第 {} 次）：{e:#}", attempt + 1);
@@ -221,6 +227,7 @@ impl LlmClient {
                 latency_ms: elapsed.as_millis() as i64,
             },
             model: self.cfg.model.clone(),
+            cached_tokens: parsed.usage.as_ref().map(|u| u.cached_tokens()).unwrap_or(0),
         })
     }
 

@@ -76,6 +76,10 @@ pub(crate) fn build_evidence(scan: &RepoScan, page: &PlannedPage) -> String {
 }
 
 /// Per-page evidence: shared header + module-scoped file list + symbol outline.
+///
+/// Ordered shared-first on purpose: everything up to the page's own scope is
+/// byte-identical for every page in the run, so a provider's prompt cache can
+/// serve that prefix for all of them. Keep page-specific parts at the end.
 pub(crate) fn build_evidence_with_shared(
     scan: &RepoScan,
     page: &PlannedPage,
@@ -83,6 +87,7 @@ pub(crate) fn build_evidence_with_shared(
 ) -> String {
     let mut out = String::with_capacity(shared.header.len() + 2048);
     out.push_str(&shared.header);
+    out.push_str(&shared.docs_section);
     let module_root = module_scope(page);
     let relevant: Vec<&SourceFile> = scan
         .files
@@ -104,7 +109,6 @@ pub(crate) fn build_evidence_with_shared(
         out.push_str(&format!("- {} ({}, {} B)\n", f.rel, lang_of(f), f.size));
     }
     out.push_str(&source_outline_from_cache(&shared.outlines, scan, page));
-    out.push_str(&shared.docs_section);
     out
 }
 

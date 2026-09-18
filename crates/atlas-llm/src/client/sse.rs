@@ -100,6 +100,7 @@ pub(crate) struct StreamAccum {
     tools: BTreeMap<usize, ToolBuilder>,
     prompt_tokens: i64,
     completion_tokens: i64,
+    cached_tokens: i64,
     model: String,
 }
 
@@ -108,6 +109,7 @@ impl StreamAccum {
         if let Some(usage) = &chunk.usage {
             self.prompt_tokens = usage.prompt_tokens.unwrap_or(0);
             self.completion_tokens = usage.completion_tokens.unwrap_or(0);
+            self.cached_tokens = usage.cached_tokens();
         }
         let Some(choice) = chunk.choices.as_ref().and_then(|c| c.first()) else {
             return;
@@ -186,6 +188,7 @@ impl StreamAccum {
                 latency_ms,
             },
             model: self.model,
+            cached_tokens: self.cached_tokens,
         }
     }
 }
@@ -279,6 +282,9 @@ mod tests {
             usage: Some(crate::wire::UsageBody {
                 prompt_tokens: Some(10),
                 completion_tokens: Some(5),
+                prompt_tokens_details: Some(crate::wire::PromptTokensDetails {
+                    cached_tokens: Some(4),
+                }),
             }),
         });
         acc.apply_chunk(&StreamChunk {
@@ -305,5 +311,6 @@ mod tests {
         assert_eq!(turn.usage.prompt_tokens, 10);
         assert_eq!(turn.usage.completion_tokens, 5);
         assert_eq!(turn.usage.latency_ms, 42);
+        assert_eq!(turn.cached_tokens, 4, "供应商报的缓存命中要带出来");
     }
 }

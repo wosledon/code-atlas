@@ -104,4 +104,8 @@ pub struct LlmTurn {
     pub tool_calls: Vec<ToolCall>,
     pub usage: LlmUsage,
     pub model: String,
+    /// Prompt tokens the provider served from its own prompt cache, when it
+    /// reports them. Tracked so a run can show whether the stable prompt prefix
+    /// is actually being reused (it is what the cost depends on).
+    pub cached_tokens: i64,
 }

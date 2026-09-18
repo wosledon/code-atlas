@@ -23,15 +23,22 @@ const CALLS_PER_ROUND: usize = 3;
 /// fixed number, so a repository that needs deeper reading can raise it.
 const PROGRESS_CEILING: usize = 4;
 
-/// Consecutive rounds with neither new page text nor a tool call that was not
-/// already made before the page is called stuck.
+/// Nudges injected into the conversation when a round goes nowhere (no new page
+/// text, no call that was not made before), before the page is given up on.
 ///
-/// This is the "alive but going nowhere" case: the model re-reads the file it
-/// already read, or re-sends the paragraph it already wrote, and would keep
-/// doing either forever. Each round costs a full model call with the whole
-/// conversation attached, so the loop stops early and hands back what exists
-/// instead of spending the rest of the budget on repeats.
-const STUCK_ROUNDS: usize = 2;
+/// A live-but-stuck model is usually repeating itself, not refusing: it re-reads
+/// a file it already read, or re-sends the paragraph it already wrote. Telling it
+/// what it just did — in the conversation it is about to re-send anyway — is what
+/// breaks the loop, and it costs no extra call. Truncating instead would throw
+/// away a page that one instruction could have saved.
+///
+/// The last entry is deliberately blunt: stop calling tools, write the page now.
+const STUCK_NUDGES: &[&str] = &[
+    "系统提示：你刚才那一轮没有推进——你重复了已经做过的工具调用，或重复了已经写过的内容。\
+不要再重复它。请基于上面已经读到的内容继续写页面正文；如果确实还缺信息，就读取一个**还没读过**的文件、或换一个搜索词、或缩小行范围。",
+    "系统提示（最后一次）：停止一切工具调用，立即输出完整的页面 markdown 正文。\
+你需要的材料已经在上面了。不要重复已写过的段落，不要重新读取已经读过的文件。",
+];
 
 /// Rounds spent re-telling the model that its tool budget is gone, before the
 /// call gives up and returns whatever prose it produced. The tool result is the
@@ -206,6 +213,9 @@ impl LlmClient {
                 tool_calls,
                 usage,
                 model,
+                // Billing detail for the run summary; the loop only needs the
+                // text, the calls and the token counts it accumulates.
+                cached_tokens: _,
             } = self.post_chat(&messages, offer, started.elapsed()).await?;
             prompt_tokens += usage.prompt_tokens;
             completion_tokens += usage.completion_tokens;
@@ -239,13 +249,22 @@ impl LlmClient {
                 marked.push((call, fresh));
             }
             let has_fresh = marked.iter().any(|(_, fresh)| *fresh);
-            // A live but going-nowhere loop: nothing new written, nothing new
-            // asked for. The next round would repeat this one.
+            // A live but going-nowhere round: nothing new written, nothing new
+            // asked for. Tell the model what it just did and let it recover —
+            // the nudge rides along with the request it is sent anyway.
+            let mut nudge: Option<&str> = None;
             if !merged.advanced && !has_fresh {
-                stuck += 1;
-                if stuck >= STUCK_ROUNDS {
+                if stuck < STUCK_NUDGES.len() {
+                    nudge = Some(STUCK_NUDGES[stuck]);
+                    stuck += 1;
+                    tracing::info!(
+                        "第 {round} 轮无进展（重复调用 / 重复正文），注入第 {stuck}/{} 次提示词纠偏",
+                        STUCK_NUDGES.len()
+                    );
+                } else {
                     tracing::warn!(
-                        "模型连续 {stuck} 轮没有新内容（重复调用 / 重复正文），提前结束本页（第 {round} 轮）"
+                        "模型连续 {} 轮没有新内容（重复调用 / 重复正文），提示词纠偏无效，结束本页（第 {round} 轮）",
+                        STUCK_NUDGES.len() + 1
                     );
                     return Ok(LlmResponse {
                         text: body,
@@ -341,6 +360,11 @@ impl LlmClient {
                 };
                 // Keep follow-up rounds cheap: long dumps bloat every later prompt.
                 messages.push(ChatMessage::tool(&truncate(&result, 6_000), &call.id));
+            }
+            // After the tool replies (an assistant `tool_calls` message must be
+            // followed by them), the corrective instruction closes the round.
+            if let Some(nudge) = nudge {
+                messages.push(ChatMessage::user(nudge));
             }
         }
     }

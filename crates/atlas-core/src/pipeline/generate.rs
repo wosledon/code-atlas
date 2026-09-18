@@ -128,7 +128,10 @@ pub(super) async fn generate_pages(
         reuse_planned,
         counts,
         use_llm,
-        tools.cache_stats(),
+        Caches {
+            tools: tools.cache_stats(),
+            prompt: llm.prompt_cache_totals(),
+        },
     );
     Ok(())
 }
@@ -159,6 +162,16 @@ fn merge_page(counts: &mut RunCounts, report: PageReport) {
     }
 }
 
+/// What the run's two caches did. Reported together because both answer the
+/// same question — how much of this run was paid for twice.
+#[derive(Clone, Copy, Default)]
+struct Caches {
+    /// Tool results served from the run-scoped snapshot cache.
+    tools: CacheStats,
+    /// `(prompt tokens, of which served from the provider's prompt cache)`.
+    prompt: (i64, i64),
+}
+
 /// Close the bars and report what the run did, including the two situations the
 /// operator has to act on: pages the depth gate rewrote and pages the model
 /// failed to produce.
@@ -169,7 +182,7 @@ fn report_run(
     reuse_planned: usize,
     counts: &mut RunCounts,
     use_llm: bool,
-    cache: CacheStats,
+    caches: Caches,
 ) {
     let (ok, failed, expanded, kept) = (
         generator.ok(),
@@ -191,6 +204,7 @@ fn report_run(
         ),
     );
 
+    let cache = caches.tools;
     if cache.lookups() > 0 {
         counts.notes.push(format!(
             "tool cache: {}/{} lookups hit ({:.0}%), {} held",
@@ -206,6 +220,20 @@ fn report_run(
             cache.hit_rate() * 100.0,
             cache.held()
         ));
+    }
+    let (prompt_tokens, cached_tokens) = caches.prompt;
+    if cached_tokens > 0 && prompt_tokens > 0 {
+        let pct = cached_tokens as f64 / prompt_tokens as f64 * 100.0;
+        counts.notes.push(format!(
+            "prompt cache: {cached_tokens}/{prompt_tokens} prompt tokens served from cache ({pct:.0}%)"
+        ));
+        progress.line(&format!(
+            "提示词缓存：{cached_tokens}/{prompt_tokens} prompt tokens 命中供应商缓存（{pct:.0}%）· 稳定前缀（系统提示 + 仓库共享证据）在最前"
+        ));
+    } else if prompt_tokens > 0 {
+        counts
+            .notes
+            .push("prompt cache: provider reported no cached prompt tokens this run".to_string());
     }
     if !counts.kept_pages.is_empty() {
         counts.notes.push(format!(
