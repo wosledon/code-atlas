@@ -53,3 +53,17 @@ lto = "thin"
 codegen-units = 1
 strip = true
 opt-level = 3
+# 体积优先的第二档：不生成的展开表、且字符串池更紧凑。
+# `catch_unwind` 全仓未使用，所以 abort 语义不会改变行为（panic 仍会终止进程）。
+panic = "abort"
+
+# 发布产物（CI 打的就是这个）：在 release 基础上再压一档体积。
+# `opt-level = "z"` + `lto = "fat"` 对 CLI 这类以 IO/网络为主、算力不在热点的程序
+# 几乎不掉性能，但能省下可观的机器码；真在意吞吐时可改用 release。
+[profile.dist]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+panic = "abort"
+codegen-units = 1
+strip = true

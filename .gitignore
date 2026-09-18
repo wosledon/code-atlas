@@ -4,6 +4,9 @@
 /web/node_modules
 /web/dist
 /crates/atlas-server/web-ui-embed
+# scripts/package-release.sh 的产物
+/stage
+/dist
 .atlas-data
 *.db
 *.db-wal

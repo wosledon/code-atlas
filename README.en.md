@@ -12,13 +12,16 @@ English · [中文](README.md)
 
 - [What it solves](#what-it-solves)
 - [Screens](#screens)
+- [Install](#install)
 - [Quick start](#quick-start)
 - [CLI reference](#cli-reference)
 - [MCP](#mcp)
 - [How generation works](#how-generation-works)
+- [Compression and size](#compression-and-size)
 - [Configuration](#configuration)
 - [Project layout](#project-layout)
 - [Security notes](#security-notes)
+- [Development](#development)
 
 ## What it solves
 
@@ -69,21 +72,36 @@ Model, duration, tokens, cache hits and incremental decisions for every init / u
 
 ![Settings](docs/images/settings.png)
 
-## Quick start
+## Install
 
-### 1. Build
+### Prebuilt binaries (recommended)
+
+Grab your platform from [Releases](https://github.com/wosledon/code-atlas/releases) and unpack — **a single executable with the UI embedded, no Node and no extra files**:
+
+| Platform            | Artifact                                |
+| ------------------- | --------------------------------------- |
+| Windows x64         | `atlas-x86_64-pc-windows-msvc.zip`      |
+| Linux x64           | `atlas-x86_64-unknown-linux-gnu.tar.gz` |
+| macOS Apple Silicon | `atlas-aarch64-apple-darwin.tar.gz`     |
+| macOS Intel         | `atlas-x86_64-apple-darwin.tar.gz`      |
+
+Each release ships a `SHA256SUMS` for verification. Linux builds target Ubuntu 22.04 (glibc 2.35) so they run on newer distributions too.
+
+### From source
 
 ```bash
-# Frontend (gzipped into the binary; rebuild the CLI after changing it)
-cd web && npm install && npm run build && cd ..
-
-cargo build -p atlas-cli --release
+cd web && npm install && npm run build && cd ..   # must come first: embedded at compile time
+cargo build --profile dist -p atlas-cli           # size-oriented profile, see below
 ```
 
-### 2. Configure
+> The frontend build is a **compile-time dependency**: `crates/atlas-server/build.rs` only gzips and embeds `web/dist` when `web/dist/index.html` exists. Build in the wrong order and the binary ships without a UI (it falls back to a built-in placeholder page). `scripts/smoke-binary.sh` exists to catch exactly that.
+
+## Quick start
+
+### 1. Configure
 
 ```bash
-./target/release/atlas init-config      # writes atlas.toml (env vars alone also work)
+./atlas init-config      # writes atlas.toml (env vars alone also work)
 ```
 
 Credential precedence: environment variables over `atlas.toml`.
@@ -93,19 +111,19 @@ export OPENAI_API_KEY=...      # or ANTHROPIC_API_KEY; local Ollama needs none
 export ATLAS_MODEL=...         # optional, overrides atlas.toml
 ```
 
-### 3. Generate the wiki + knowledge base
+### 2. Generate the wiki + knowledge base
 
 ```bash
-./target/release/atlas plan    # preview the planned pages, no model calls
-./target/release/atlas init    # first generation
-./target/release/atlas update  # later incremental updates (0 model calls when nothing changed)
+./atlas plan    # preview the planned pages, no model calls
+./atlas init    # first generation
+./atlas update  # later incremental updates (0 model calls when nothing changed)
 ```
 
-### 4. Use it
+### 3. Use it
 
 ```bash
-./target/release/atlas search "authentication flow"   # hits include body text and line ranges
-./target/release/atlas web                            # Web UI + REST API (port 4321)
+./atlas search "authentication flow"   # hits include body text and line ranges
+./atlas web                            # Web UI + REST API (port 4321)
 ```
 
 ## CLI reference
@@ -166,8 +184,52 @@ Main endpoints: `/api/health` · `/api/projects` · `/api/pages` · `/api/pages/
 - **Incremental:** an unchanged page fingerprint (focus + evidence + module file list) reuses the existing body and skips the model; an unchanged body reuses chunks; pages that disappeared from the tree are removed along with their chunks.
 - **Chunking:** `[kb.chunk] mode` defaults to `hybrid`: the model picks boundaries and writes summaries, so a chunk is summary + content. Without a model it degrades to structural splitting.
 - **Prompt cache:** requests are ordered most-stable-first (a byte-identical system prompt → run-shared evidence → page-specific instructions), and the depth rewrite reuses the first pass's prefix. The run summary prints the hit rate.
-- **Tool overhead:** the output-compression pipeline applies allow-listed indentation hoisting and repeated-line folding; `read_file` reads each file from disk once per run and serves any later line range from a snapshot; an identical tool call is never executed twice.
 - **Without a key:** the pipeline drops straight into template mode (a single advisory note) instead of retrying page by page.
+
+## Compression and size
+
+Saving tokens and saving disk are two different jobs; both are measured here.
+
+### Tool-output compression (tokens)
+
+The model reads text, so compression may only be a **semantics- and character-preserving** rewrite — no gzip-style encoding that needs a decoder. The pipeline lives in `crates/atlas-core/src/tools/compress.rs` and runs four passes:
+
+| Pass                               | Removes                                          | Applies to        |
+| ---------------------------------- | ------------------------------------------------ | ----------------- |
+| Whitespace normalization           | CRLF, trailing blanks                            | every tool result |
+| Blank-run collapsing               | runs of ≥3 blank lines → 1                       | every tool result |
+| **Per-block indentation hoisting** | a block's common indent (one marker per block)   | `read_file` only  |
+| **Repeated-line folding**          | runs of ≥4 identical lines → first line + `(xN)` | `read_file` only  |
+
+Indentation hoisting is the only language-aware step, behind three gates: an **extension allow-list** (anything unlisted is left alone, so Python / YAML / Markdown and friends are safe by construction), a **multi-line-string guard** (leading spaces inside Go raw strings, JS template literals or Java/C# text blocks are data — those lines are detected and skipped), and a **payoff threshold** (if the saved characters don't cover the marker, nothing is touched). Markers are self-describing and carry no line number:
+
+```
+// begin: 8 spaces omitted per line
+12|     if sql == "" {
+// end
+```
+
+Adding back N leading spaces restores the bytes exactly, so `path:line` references stay valid. Measured on 850k characters of this repo's rs/ts/tsx/json: **6.2% saved by per-block hoisting** (versus 2.6% for whole-window hoisting and 0.9% for equal-indent segments). Accounting is in **characters, not bytes** — one CJK character is 3 bytes but roughly one token, so byte counts would overstate the win about threefold.
+
+There are two pipelines rather than one: `read_file` numbers every line, and collapsing blank lines would shift those numbers, so it runs "per-line clipping → hoisting → folding"; every other tool result is free text and runs `compact` (line-end normalization + blank-run collapsing).
+
+### Tool-result caching (no repeated reads or repeated reasoning)
+
+- **Call level:** the key is the tool name plus normalized arguments (order-insensitive), so a repeated call returns instantly.
+- **File snapshots:** `read_file` reads each file from disk once per run and serves *any* later line range from the snapshot — shifted windows, overlapping ranges and second passes all hit.
+
+### Binary size (disk)
+
+Release artifacts use a dedicated `dist` profile: **12.03 MB → 6.35 MB** measured.
+
+| Change                               | Effect                                            |
+| ------------------------------------ | ------------------------------------------------- |
+| `panic = "abort"`                    | 12.03 → 9.19 MB (-24%)                            |
+| `opt-level = "z"` + `lto = "fat"`    | → 6.35 MB (-47% total)                            |
+| `strip = true` + `codegen-units = 1` | drops symbols, gives LTO room                     |
+| Frontend gzipped and embedded        | the whole UI is ~1.6 MB (about 5 MB uncompressed) |
+
+`opt-level = "z"` costs almost nothing on a program whose hot paths are IO and network rather than compute. Nothing in the workspace uses `catch_unwind`, so `panic = "abort"` changes no behaviour. The final Windows zip is just **4.2 MB**.
 
 ## Configuration
 
@@ -213,6 +275,23 @@ data/             Generated SQLite database and lock files
 Fine at home or on your own hotspot; **do not run it on office or public Wi-Fi**. CORS only allows `localhost` origins, which stops other websites from reading your local API cross-origin in the browser, but it does not stop direct requests from inside the LAN.
 
 Files matched by `[privacy] redact_paths` (`.env`, `*.pem`, `id_rsa*`, …) never enter the model context, but please still make sure no secrets are lying around in ordinary files that do get read.
+
+## Development
+
+```bash
+cargo clippy --workspace --all-targets -- -D warnings   # one of the CI gates
+cargo test --workspace                                   # full suite
+bash scripts/smoke-binary.sh target/dist/atlas.exe       # proves the binary is self-contained
+bash scripts/package-release.sh <triple> <binary>        # package locally
+```
+
+Pushing a `v*` tag triggers the [Release workflow](.github/workflows/release.yml): four platforms build in parallel → smoke-tested → packaged → published as a GitHub Release with `SHA256SUMS`. Manual runs of that workflow are dry runs (they upload Actions artifacts but create no Release).
+
+CI does not check `cargo fmt`: the repository carries a lot of pre-existing formatting drift, so enabling that gate would require reformatting everything first. `clippy -D warnings` and the full test suite are green.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
 
 ## Documentation
 

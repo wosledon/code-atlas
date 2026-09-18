@@ -1,0 +1,65 @@
+name: Build atlas (single binary, embedded UI)
+description: >
+  构建发布用的 atlas 单二进制：先出前端产物（build.rs 会把它 gzip 内嵌），
+  再用体积优先的 dist profile 编译，最后冒烟验证这个二进制能独立提供服务。
+
+inputs:
+  target:
+    description: Rust target triple
+    required: true
+
+outputs:
+  binary:
+    description: 产出二进制相对于仓库根的路径
+    value: ${{ steps.locate.outputs.binary }}
+  size-bytes:
+    description: 二进制字节数
+    value: ${{ steps.locate.outputs.size }}
+
+runs:
+  using: composite
+  steps:
+    # 前端必须先构建：crates/atlas-server/build.rs 只在 web/dist/index.html
+    # 存在时才把资源内嵌进二进制，顺序反了打出来的包就没有 UI。
+    - name: Set up Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: "22"
+        cache: npm
+        cache-dependency-path: web/package-lock.json
+
+    - name: Build web UI
+      shell: bash
+      run: |
+        cd web
+        npm ci
+        npm run build
+
+    - name: Set up Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: ${{ inputs.target }}
+
+    - uses: Swatinem/rust-cache@v2
+      with:
+        key: dist-${{ inputs.target }}
+
+    - name: Build release binary
+      shell: bash
+      run: cargo build --profile dist --locked --target ${{ inputs.target }} -p atlas-cli
+
+    - name: Locate binary
+      id: locate
+      shell: bash
+      run: |
+        BIN="target/${{ inputs.target }}/dist/atlas"
+        if [ "${RUNNER_OS}" = "Windows" ]; then BIN="$BIN.exe"; fi
+        test -f "$BIN" || { echo "::error::未找到产物 $BIN"; exit 1; }
+        SIZE=$(wc -c < "$BIN" | tr -d ' ')
+        echo "binary=$BIN" >> "$GITHUB_OUTPUT"
+        echo "size=$SIZE" >> "$GITHUB_OUTPUT"
+        echo "$BIN 大小: $((SIZE / 1024 / 1024)) MB ($SIZE 字节)"
+
+    - name: Smoke-test the standalone binary
+      shell: bash
+      run: ./scripts/smoke-binary.sh "${{ steps.locate.outputs.binary }}"

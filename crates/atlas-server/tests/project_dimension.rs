@@ -1,6 +1,6 @@
 //! Project-dimension registry & update contract (unit + contract tests).
 
-use atlas_core::projects::{write_project_marker, ProjectRegistry};
+use atlas_core::projects::{ProjectRegistry, write_project_marker};
 use atlas_core::repo_slug;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -9,6 +9,18 @@ fn temp_dir(tag: &str) -> PathBuf {
     let p = std::env::temp_dir().join(format!("atlas-server-proj-{tag}-{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(&p).unwrap();
     p
+}
+
+/// Same directory, whatever the platform spells it as.
+///
+/// The marker stores a canonicalized path; on Windows a temp dir with an 8.3
+/// short name (`ADMINI~1`) canonicalizes to a different string than the one this
+/// test built, and comparing raw strings fails for a path that is in fact equal.
+fn same_dir(a: &Path, b: &Path) -> bool {
+    match (fs::canonicalize(a), fs::canonicalize(b)) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => a == b,
+    }
 }
 
 fn test_registry(launch: &Path) -> ProjectRegistry {
@@ -48,7 +60,12 @@ fn discovery_from_external_marker_supports_project_dimension_update() {
     let found = reg.discover_from_bases(std::slice::from_ref(&external));
     assert_eq!(found.len(), 1);
     let pref = reg.resolve(Some(&repo_slug(&target))).unwrap();
-    assert_eq!(pref.root, target);
+    assert!(
+        same_dir(&pref.root, &target),
+        "{:?} != {:?}",
+        pref.root,
+        target
+    );
     // Update would use pref.root + pref.cfg — isolated per project.
     assert!(!pref.is_launch);
 
@@ -60,6 +77,7 @@ fn discovery_from_external_marker_supports_project_dimension_update() {
 #[test]
 fn lock_conflict_message_is_detectable_for_http_409() {
     // Contract used by run_project_update / MCP atlas_update.
-    let msg = "atlas lock held by another process (pid=1 run_id=x). If that process is gone, delete ...";
+    let msg =
+        "atlas lock held by another process (pid=1 run_id=x). If that process is gone, delete ...";
     assert!(msg.contains("atlas lock held"));
 }

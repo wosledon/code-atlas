@@ -12,13 +12,16 @@
 
 - [它解决什么](#它解决什么)
 - [界面](#界面)
+- [安装](#安装)
 - [快速开始](#快速开始)
 - [CLI 命令](#cli-命令)
 - [MCP 接入](#mcp-接入)
 - [生成行为（成本与增量）](#生成行为成本与增量)
+- [压缩与体积](#压缩与体积)
 - [配置](#配置)
 - [项目结构](#项目结构)
 - [安全提示](#安全提示)
+- [开发](#开发)
 
 ## 它解决什么
 
@@ -69,21 +72,36 @@
 
 ![设置](docs/images/settings.png)
 
-## 快速开始
+## 安装
 
-### 1. 构建
+### 下载预编译二进制（推荐）
+
+从 [Releases](https://github.com/wosledon/code-atlas/releases) 下载对应平台，解压即用 —— **单个可执行文件，前端已内嵌，无需 Node、无需额外文件**：
+
+| 平台                | 产物                                    |
+| ------------------- | --------------------------------------- |
+| Windows x64         | `atlas-x86_64-pc-windows-msvc.zip`      |
+| Linux x64           | `atlas-x86_64-unknown-linux-gnu.tar.gz` |
+| macOS Apple Silicon | `atlas-aarch64-apple-darwin.tar.gz`     |
+| macOS Intel         | `atlas-x86_64-apple-darwin.tar.gz`      |
+
+每个 Release 另外附带 `SHA256SUMS` 供校验。Linux 产物在 Ubuntu 22.04（glibc 2.35）上构建，可在更新的发行版直接运行。
+
+### 从源码构建
 
 ```bash
-# 前端（产物 gzip 后嵌入二进制；改前端后需重新 build CLI）
-cd web && npm install && npm run build && cd ..
-
-cargo build -p atlas-cli --release
+cd web && npm install && npm run build && cd ..   # 必须先出前端：编译期会把它内嵌
+cargo build --profile dist -p atlas-cli           # 体积优先档，见下文「压缩与体积」
 ```
 
-### 2. 配置
+> 前端产物是**编译期依赖**：`crates/atlas-server/build.rs` 只在 `web/dist/index.html` 存在时才把它 gzip 内嵌。顺序反了，打出来的二进制就没有 UI（运行时只会显示内置兜底页）。忘了也不会白跑 —— `scripts/smoke-binary.sh` 会检查这一点。
+
+## 快速开始
+
+### 1. 配置
 
 ```bash
-./target/release/atlas init-config      # 生成 atlas.toml（也可全程用环境变量）
+./atlas init-config      # 生成 atlas.toml（也可全程用环境变量）
 ```
 
 密钥优先级：环境变量 > `atlas.toml`。
@@ -93,19 +111,19 @@ export OPENAI_API_KEY=...      # 或 ANTHROPIC_API_KEY；本机 Ollama 可不设
 export ATLAS_MODEL=...         # 可选，覆盖 atlas.toml
 ```
 
-### 3. 生成 Wiki + 知识库
+### 2. 生成 Wiki + 知识库
 
 ```bash
-./target/release/atlas plan    # 先看要生成哪些页面、不调用模型
-./target/release/atlas init    # 首次生成
-./target/release/atlas update  # 之后增量更新（内容没变则 0 次模型调用）
+./atlas plan    # 先看要生成哪些页面、不调用模型
+./atlas init    # 首次生成
+./atlas update  # 之后增量更新（内容没变则 0 次模型调用）
 ```
 
-### 4. 使用
+### 3. 使用
 
 ```bash
-./target/release/atlas search "认证流程"   # 命令行检索，命中含正文与行号
-./target/release/atlas web                 # Web UI + REST API（默认 4321 端口）
+./atlas search "认证流程"   # 命令行检索，命中含正文与行号
+./atlas web                 # Web UI + REST API（默认 4321 端口）
 ```
 
 ## CLI 命令
@@ -166,8 +184,52 @@ atlas mcp                              # MCP stdio 服务
 - **增量：** 页指纹（focus + 证据 + 模块文件清单）未变 → 复用正文并跳过模型；正文未变 → 复用 chunk；文档树里消失的旧页会连 chunk 一起清理。
 - **分块：** `[kb.chunk] mode` 默认 `hybrid`：由模型决定边界并写摘要，chunk = 摘要 + 分块内容；无模型时退化为结构切分。
 - **提示词缓存：** 请求按「稳定前缀在前」组织（系统提示跨页逐字节一致 → 仓库共享证据 → 页级要求），深度重写复用首稿前缀。汇总行打印缓存命中率。
-- **工具开销：** 输出压缩管道按语言白名单做缩进外提与重复行折叠；`read_file` 每文件每轮只读一次盘、任意行范围走快照；同一工具调用不重复执行。
 - **无密钥时：** 直接进入模板模式（一条 advisory note），不逐页重试。
+
+## 压缩与体积
+
+省 token 和省磁盘是两件事，这里都做了实测。
+
+### 工具输出压缩（省 token）
+
+模型读的是文本，所以压缩只能是**语义与字符双重保真**的改写 —— 不能用 gzip 那类需要解码器的编码。管道在 `crates/atlas-core/src/tools/compress.rs`，共四个 pass：
+
+| pass             | 去掉什么                                   | 用在哪         |
+| ---------------- | ------------------------------------------ | -------------- |
+| 空白归一         | CRLF、行尾空白                             | 所有工具输出   |
+| 空行折叠         | 连续 ≥3 个空行留 1 个                      | 所有工具输出   |
+| **按块缩进外提** | 整块公共缩进（块首尾各一行记号）           | 仅 `read_file` |
+| **重复行折叠**   | 连续 ≥4 个完全相同的行 → 保留首行 + `(xN)` | 仅 `read_file` |
+
+缩进外提是唯一「语言相关」的一步，闸门有三道：**扩展名白名单**（不在表里的一律不动，Python / YAML / Markdown 等缩进即语法的语言因此天然安全）、**跨行字符串守卫**（Go 反引号、JS 模板串、Java/C# 三引号里的行首空格是数据，逐行标出并绕开）、**收益门槛**（省下的不够写记号就不压）。记号自解释、且不占行号：
+
+```
+// begin: 8 spaces omitted per line
+12|     if sql == "" {
+// end
+```
+
+补回 N 个前导空格即逐字节复原，所以 `path:line` 引用不受影响。实测本仓 85 万字符的 rs/ts/tsx/json：**按块外提省 6.2%**（对照：整窗外提 2.6%、按等缩进段分块 0.9%）。记账单位是**字符**不是字节（中文一字 3 字节 ≈ 1 token，用字节会虚高约 3 倍）。
+
+两条管道而非一条：`read_file` 每行都带原始行号，折叠空行会让行号错位，所以它走「逐行裁剪 → 缩进外提 → 重复行折叠」；其余工具输出是自由文本，走 `compact`（行尾归一 + 空行折叠）。
+
+### 工具结果缓存（省重复读盘与重复推理）
+
+- **调用级**：键 = 工具名 + 规范化参数（键序无关），同一调用第二次直接返回。
+- **文件快照**：`read_file` 每个文件一次运行只读一次盘，之后**任意行范围**都从快照切片 —— 窗口平移、范围重叠、二次精读全都命中。
+
+### 二进制体积（省磁盘）
+
+发布产物走专门的 `dist` profile，实测 **12.03 MB → 6.35 MB**：
+
+| 措施                                 | 效果                               |
+| ------------------------------------ | ---------------------------------- |
+| `panic = "abort"`                    | 12.03 → 9.19 MB（-24%）            |
+| `opt-level = "z"` + `lto = "fat"`    | → 6.35 MB（累计 -47%）             |
+| `strip = true` + `codegen-units = 1` | 去符号表、给 LTO 让路              |
+| 前端 gzip 后内嵌                     | 整个 UI 约 1.6 MB（压缩前约 5 MB） |
+
+`opt-level = "z"` 对这类以 IO/网络为主、算力不在热点的程序几乎不掉性能。全仓未使用 `catch_unwind`，所以 `panic = "abort"` 不改变行为。最终的 Windows zip 约 **4.1 MB**。
 
 ## 配置
 
@@ -213,6 +275,23 @@ data/              生成的 SQLite 库与锁文件
 家里 / 自己的热点没问题，**办公室或公共 WiFi 下不要开**。CORS 只放行 `localhost` 来源，能挡住其它网站在你浏览器里跨源读取本机 API，但挡不住局域网内的直接请求。
 
 另外 `[privacy] redact_paths` 里的文件（`.env`、`*.pem`、`id_rsa*` 等）永不进入模型上下文，但仍请自行确认密钥没有散落在会被读取的普通文件里。
+
+## 开发
+
+```bash
+cargo clippy --workspace --all-targets -- -D warnings   # CI 门禁之一
+cargo test --workspace                                   # 全量测试
+bash scripts/smoke-binary.sh target/dist/atlas.exe       # 验证单二进制自包含
+bash scripts/package-release.sh <triple> <二进制>        # 本地打包
+```
+
+推 `v*` 标签即触发 [Release 工作流](.github/workflows/release.yml)：四个平台并行构建 → 冒烟验证 → 打包 → 创建 GitHub Release 并附 `SHA256SUMS`。手动触发同一工作流只做干跑（上传为 Actions artifact，不建 Release）。
+
+CI 不检查 `cargo fmt`：仓库里存在大量历史格式差异，加门禁需要先整体格式化。`clippy -D warnings` 与全量测试是绿的。
+
+## 许可证
+
+MIT，见 [LICENSE](LICENSE)。
 
 ## 文档
 

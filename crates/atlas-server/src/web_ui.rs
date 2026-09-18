@@ -1,7 +1,5 @@
 //! SPA static assets: on-disk override, compile-time embed, or minimal fallback.
 
-use axum::body::Body;
-use axum::http::{header, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use std::path::Path;
 
@@ -39,7 +37,10 @@ pub(crate) async fn serve_embedded(
 ) -> Response {
     #[cfg(embedded_ui)]
     {
+        use axum::body::Body;
         use axum::body::Bytes;
+        use axum::http::StatusCode;
+        use axum::http::header;
         use rust_embed::RustEmbed;
 
         #[derive(RustEmbed)]
@@ -67,8 +68,10 @@ pub(crate) async fn serve_embedded(
                         header::CONTENT_ENCODING,
                         header::HeaderValue::from_static("gzip"),
                     );
-                    r.headers_mut()
-                        .insert(header::VARY, header::HeaderValue::from_static("accept-encoding"));
+                    r.headers_mut().insert(
+                        header::VARY,
+                        header::HeaderValue::from_static("accept-encoding"),
+                    );
                     r
                 } else {
                     use std::io::Read;
@@ -104,7 +107,9 @@ pub(crate) async fn serve_embedded(
     #[cfg(not(embedded_ui))]
     {
         let _ = (uri, headers);
-        fallback_page().await
+        // `Html` is not a `Response`: convert, or a fresh clone (no `web/dist`)
+        // fails to build at all.
+        fallback_page().await.into_response()
     }
 }
 
