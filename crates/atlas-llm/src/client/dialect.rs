@@ -101,16 +101,19 @@ pub fn strip(text: &str) -> String {
 /// dialect and parsed the same way — whether the caller is still offering tools
 /// is its own decision, not the parser's: a model that asks for a file after the
 /// tool budget is spent asked for it either way, and dropping the request is
-/// what leaves a page without text. `specs` only types the arguments.
+/// what leaves a page without text. `specs` only types the arguments; `tag`
+/// namespaces the generated ids, which must stay unique across the whole
+/// conversation a caller accumulates.
 pub(crate) fn resolve(
     text: &str,
     calls: Vec<ToolCall>,
     specs: &[ToolSpec],
+    tag: &str,
 ) -> (Vec<ToolCall>, String) {
     if !calls.is_empty() {
         return (calls, text.to_string());
     }
-    match extract(text, specs) {
+    match extract(text, specs, tag) {
         Some(d) => (d.calls, d.prose),
         None => (Vec::new(), strip(text)),
     }
@@ -123,14 +126,14 @@ struct Dialect {
 
 /// The calls a text dialect stands for, plus the prose around them. `None` when
 /// the text holds no call this model could run.
-fn extract(text: &str, specs: &[ToolSpec]) -> Option<Dialect> {
+fn extract(text: &str, specs: &[ToolSpec], tag: &str) -> Option<Dialect> {
     let calls: Vec<ToolCall> = function_blocks(text)
         .into_iter()
         .enumerate()
         .filter(|(_, (_, name, _))| !name.is_empty())
         .map(|(i, (_, name, body))| ToolCall {
             // Only has to match the `role: tool` message that answers it.
-            id: format!("text_call_{i}"),
+            id: format!("text_call_{tag}_{i}"),
             arguments: parameters(&name, body, specs).to_string(),
             name,
         })
@@ -256,7 +259,7 @@ mod tests {
     #[test]
     fn resolves_a_read_file_transcript() {
         let text = "正文。\n\n<tool_call>\n<function=read_file>\n<parameter=path>\ncrates/atlas-store/src/schema.rs\n</parameter>\n<parameter=start_line>\n121\n</parameter>\n<parameter=end_line>\n159\n</parameter>\n</function>\n</tool_call>\n";
-        let (calls, prose) = resolve(text, Vec::new(), &specs());
+        let (calls, prose) = resolve(text, Vec::new(), &specs(), "t");
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "read_file");
         assert_eq!(args(&calls[0])["path"], "crates/atlas-store/src/schema.rs");
@@ -272,7 +275,7 @@ mod tests {
     #[test]
     fn resolves_every_call_in_a_round() {
         let text = "<tool_call><function=read_file><parameter=path>a.rs</parameter></function></tool_call>\n<tool_call><function=read_file><parameter=path>b.rs</parameter></function></tool_call>\n";
-        let (calls, prose) = resolve(text, Vec::new(), &specs());
+        let (calls, prose) = resolve(text, Vec::new(), &specs(), "t");
         assert_eq!(calls.len(), 2, "{calls:?}");
         assert_eq!(args(&calls[0])["path"], "a.rs");
         assert_eq!(args(&calls[1])["path"], "b.rs");
@@ -288,7 +291,7 @@ mod tests {
             name: "read_file".into(),
             arguments: "{}".into(),
         }];
-        let (calls, text) = resolve("正文", structured, &specs());
+        let (calls, text) = resolve("正文", structured, &specs(), "t");
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].id, "call_1");
         assert_eq!(text, "正文");
@@ -299,7 +302,7 @@ mod tests {
     #[test]
     fn parses_calls_the_caller_still_has_to_decide_about() {
         let text = "前言\n<tool_call>\n<function=read_file>\n<parameter=path>a.rs\n</parameter>\n</function>\n</tool_call>\n";
-        let (calls, prose) = resolve(text, Vec::new(), &specs());
+        let (calls, prose) = resolve(text, Vec::new(), &specs(), "t");
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "read_file");
         assert_eq!(prose, "前言");
@@ -334,7 +337,7 @@ mod tests {
     #[test]
     fn coerces_values_by_declared_type() {
         let text = "<function=read_file><parameter=path>121</parameter><parameter=start_line>121</parameter></function>";
-        let (calls, _) = resolve(text, Vec::new(), &specs());
+        let (calls, _) = resolve(text, Vec::new(), &specs(), "t");
         let args = args(&calls[0]);
         assert_eq!(args["path"], "121");
         assert_eq!(args["start_line"], 121);
@@ -344,7 +347,7 @@ mod tests {
     #[test]
     fn ignores_unclosed_functions() {
         let text = "正文开头。\n\n<function=read_file>\n<parameter=path>\na.rs\n</parameter>\n";
-        let (calls, prose) = resolve(text, Vec::new(), &specs());
+        let (calls, prose) = resolve(text, Vec::new(), &specs(), "t");
         assert!(calls.is_empty());
         assert!(prose.contains("正文开头。"), "{prose}");
         assert!(!prose.contains("<function"), "{prose}");
@@ -356,7 +359,7 @@ mod tests {
     #[test]
     fn strips_antml_invoke_blocks() {
         let text = "正文\nantml:invoke name=\"read_file\"\n<parameter=path>\na.rs\n</parameter>\n</antml:invoke>\n";
-        let (calls, prose) = resolve(text, Vec::new(), &specs());
+        let (calls, prose) = resolve(text, Vec::new(), &specs(), "t");
         assert!(calls.is_empty());
         assert_eq!(prose, "正文");
     }

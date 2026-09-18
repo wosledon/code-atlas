@@ -24,18 +24,12 @@ crates/x.rs
 </tool_call>
 ";
 
-/// 同一个协议方言，换成另一个文件——用来模拟「预算用尽后还在读」。
-const DIALECT_LATE: &str = "\
-还差一个文件。
-
-<tool_call>
-<function=read_file>
-<parameter=path>
-crates/y.rs
-</parameter>
-</function>
-</tool_call>
-";
+/// 同一个协议方言，换成另一个文件——用来模拟「一轮读一个文件」。
+fn dialect_for(path: &str) -> String {
+    format!(
+        "还要再看一个文件。\n\n<tool_call>\n<function=read_file>\n<parameter=path>\n{path}\n</parameter>\n</function>\n</tool_call>\n"
+    )
+}
 
 const FINAL: &str = "## 职责\n\n`crates/x.rs:121` 定义了入口函数，供 CLI 调用。\n";
 
@@ -179,19 +173,55 @@ async fn text_dialect_tool_request_runs_as_a_real_round() {
     );
 }
 
-/// 预算用尽后模型还在要文件（线上表现为「模板回退（输出过短）」）：
-/// 先把工具给出去，再要正文，页面才写得出来。
+/// 一轮读一个文件的模型（线上就是它）：预算按**调用次数**算，
+/// `max_tool_rounds = 2` 给出 6 次调用，足够读完一页需要的 3–6 个文件。
 #[tokio::test]
-async fn tool_request_after_the_budget_still_gets_its_file() {
+async fn one_file_per_round_still_reads_a_pages_worth_of_files() {
     let seen = Arc::new(Mutex::new(Vec::new()));
-    let llm = client(fake_server(
-        vec![
-            DIALECT.to_string(),
-            DIALECT_LATE.to_string(),
-            FINAL.to_string(),
-        ],
-        seen.clone(),
-    ));
+    let files = ["a.rs", "b.rs", "c.rs", "d.rs", "e.rs"];
+    let mut replies: Vec<String> = files.iter().map(|f| dialect_for(f)).collect();
+    replies.push(FINAL.to_string());
+    let llm = client(fake_server(replies, seen.clone()));
+    let (ran, exec) = recorder();
+
+    let resp = llm
+        .chat_with_tools("system", "user", &[read_file_spec()], 2, exec)
+        .await
+        .expect("chat_with_tools");
+
+    let ran = ran.lock().expect("ran").clone();
+    assert_eq!(
+        ran.len(),
+        files.len(),
+        "each requested file was read: {ran:?}"
+    );
+    assert!(ran[4].contains("e.rs"), "{ran:?}");
+    assert!(resp.text.contains("定义"), "{}", resp.text);
+    assert!(!resp.text.contains("<tool_call"), "{}", resp.text);
+
+    // 方言生成的 id 必须跨轮唯一：重复 id 的 tool_calls 会被严格网关判 400。
+    let requests = seen.lock().expect("seen");
+    let last = requests.last().expect("last request");
+    let mut ids: Vec<&str> = last
+        .match_indices(r#""id":"text_call_"#)
+        .map(|(at, _)| {
+            let rest = &last[at + 6..];
+            &rest[..rest.find('"').expect("closing quote")]
+        })
+        .collect();
+    let total = ids.len();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), total, "call ids repeat across rounds: {ids:?}");
+    assert!(total >= files.len(), "every read round is in the history");
+}
+
+/// 预算用尽后模型还在要文件：不执行，但明确告诉它「直接写正文」。
+/// 这是模型停下来的信号——只在请求里不再提供 tools，方言型模型会继续要。
+#[tokio::test]
+async fn budget_refusal_tells_the_model_to_write() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let llm = client(fake_server(vec![DIALECT.to_string()], seen.clone()));
     let (ran, exec) = recorder();
 
     let resp = llm
@@ -200,16 +230,28 @@ async fn tool_request_after_the_budget_still_gets_its_file() {
         .expect("chat_with_tools");
 
     let ran = ran.lock().expect("ran").clone();
-    assert_eq!(ran.len(), 2, "both requested files must be read: {ran:?}");
-    assert!(ran[1].contains("crates/y.rs"), "{ran:?}");
-    assert!(resp.text.contains("定义"), "{}", resp.text);
+    assert_eq!(ran.len(), 3, "预算 3 次，恰好用完：{ran:?}");
     assert!(!resp.text.contains("<tool_call"), "{}", resp.text);
 
     let requests = seen.lock().expect("seen");
-    assert_eq!(requests.len(), 3, "read, read again, then write");
+    assert_eq!(
+        requests[3].matches("pub fn main()").count(),
+        3,
+        "the three budgeted calls are executed for real"
+    );
+    let refusal = &requests[4];
+    assert_eq!(
+        refusal.matches("pub fn main()").count(),
+        3,
+        "past the budget nothing is executed: {refusal}"
+    );
+    assert!(
+        refusal.contains("工具调用预算已用尽") && refusal.contains("直接输出页面 markdown 正文"),
+        "the model must be told why the call was refused and what to do: {refusal}"
+    );
 }
 
-/// 一直要文件也有尽头：超出补读上限就返回现有正文，不会无限转下去。
+/// 一直要文件也有尽头：拒绝到上限就返回现有正文，不会无限转下去。
 #[tokio::test]
 async fn endless_tool_requests_stop_at_the_cap() {
     let seen = Arc::new(Mutex::new(Vec::new()));
@@ -221,8 +263,9 @@ async fn endless_tool_requests_stop_at_the_cap() {
         .await
         .expect("chat_with_tools");
 
-    assert_eq!(ran.lock().expect("ran").len(), 3, "1 轮 + 2 次补读");
-    assert_eq!(seen.lock().expect("seen").len(), 4);
+    assert_eq!(ran.lock().expect("ran").len(), 3, "预算内执行 3 次");
+    // 3 次执行 + 1 次被告知预算已尽 + 1 次再问 + 1 次放弃
+    assert_eq!(seen.lock().expect("seen").len(), 6);
     assert!(!resp.text.contains("<tool_call"), "{}", resp.text);
     assert!(!resp.text.contains("parameter"), "{}", resp.text);
     // 走不到正文时也别把已经写出来的那段丢掉（空正文会被上层换成模板）。
