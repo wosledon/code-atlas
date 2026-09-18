@@ -24,7 +24,14 @@ impl std::fmt::Debug for LlmConfig {
         f.debug_struct("LlmConfig")
             .field("provider", &self.provider)
             .field("model", &self.model)
-            .field("api_key", &if self.api_key.is_empty() { "…" } else { "«redacted»" })
+            .field(
+                "api_key",
+                &if self.api_key.is_empty() {
+                    "…"
+                } else {
+                    "«redacted»"
+                },
+            )
             .field("base_url", &self.base_url)
             .field("temperature", &self.temperature)
             .field("max_output_tokens", &self.max_output_tokens)

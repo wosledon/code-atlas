@@ -13,10 +13,20 @@ pub(crate) struct ChatMessage {
 
 impl ChatMessage {
     pub(crate) fn system(content: &str) -> Self {
-        Self { role: "system".into(), content: Some(content.into()), tool_calls: None, tool_call_id: None }
+        Self {
+            role: "system".into(),
+            content: Some(content.into()),
+            tool_calls: None,
+            tool_call_id: None,
+        }
     }
     pub(crate) fn user(content: &str) -> Self {
-        Self { role: "user".into(), content: Some(content.into()), tool_calls: None, tool_call_id: None }
+        Self {
+            role: "user".into(),
+            content: Some(content.into()),
+            tool_calls: None,
+            tool_call_id: None,
+        }
     }
     pub(crate) fn tool(content: &str, tool_call_id: &str) -> Self {
         Self {
@@ -192,7 +202,10 @@ mod tests {
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["messages"][0]["tool_calls"][0]["type"], "function");
-        assert_eq!(json["messages"][0]["tool_calls"][0]["function"]["name"], "read_file");
+        assert_eq!(
+            json["messages"][0]["tool_calls"][0]["function"]["name"],
+            "read_file"
+        );
         assert!(
             json.get("tools").is_none(),
             "an empty tool list must be omitted, not sent as []"

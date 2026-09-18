@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use std::time::{Duration, Instant};
 
 use crate::types::{LlmResponse, LlmTurn, LlmUsage, ToolCall, ToolSpec};
@@ -88,7 +88,8 @@ impl LlmClient {
                 let msg = e.to_string();
                 if msg.contains("llm http 400") || msg.contains("llm http 404") {
                     tracing::warn!("gateway rejected stream:true, retrying without stream");
-                    self.post_chat_attempt(messages, tools, elapsed, false).await
+                    self.post_chat_attempt(messages, tools, elapsed, false)
+                        .await
                 } else {
                     Err(Attempt::Fatal(e))
                 }
@@ -107,7 +108,9 @@ impl LlmClient {
         // Mark this attempt: a retried request must not leave the text it had
         // already streamed before failing in the page being written.
         sse::emit_round_start();
-        let out = self.post_chat_stream(messages, tools, elapsed, stream).await;
+        let out = self
+            .post_chat_stream(messages, tools, elapsed, stream)
+            .await;
         sse::emit_round_end(out.is_ok());
         out
     }
@@ -139,15 +142,19 @@ impl LlmClient {
             stream,
         };
         let url = format!("{}/chat/completions", self.resolve_base_url());
-        let key = self
-            .api_key
-            .clone()
-            .unwrap_or_else(|| "ollama".to_string());
+        let key = self.api_key.clone().unwrap_or_else(|| "ollama".to_string());
         let mut req = self
             .http
             .post(&url)
             .bearer_auth(key)
-            .header("accept", if stream { "text/event-stream, application/json" } else { "application/json" })
+            .header(
+                "accept",
+                if stream {
+                    "text/event-stream, application/json"
+                } else {
+                    "application/json"
+                },
+            )
             .json(&body);
         if !stream {
             // some gateways treat Accept: event-stream as mandatory stream
@@ -159,10 +166,7 @@ impl LlmClient {
             .map_err(|e| Attempt::Transient(anyhow!("llm transport error @ {url}: {e}")))?;
         let status = resp.status();
         if !status.is_success() {
-            let text = resp
-                .text()
-                .await
-                .unwrap_or_default();
+            let text = resp.text().await.unwrap_or_default();
             return Err(Attempt::from_status(status, &text, &url));
         }
 
@@ -218,7 +222,11 @@ impl LlmClient {
             text: message.content.unwrap_or_default(),
             tool_calls,
             usage: LlmUsage {
-                prompt_tokens: parsed.usage.as_ref().and_then(|u| u.prompt_tokens).unwrap_or(0),
+                prompt_tokens: parsed
+                    .usage
+                    .as_ref()
+                    .and_then(|u| u.prompt_tokens)
+                    .unwrap_or(0),
                 completion_tokens: parsed
                     .usage
                     .as_ref()
@@ -227,7 +235,11 @@ impl LlmClient {
                 latency_ms: elapsed.as_millis() as i64,
             },
             model: self.cfg.model.clone(),
-            cached_tokens: parsed.usage.as_ref().map(|u| u.cached_tokens()).unwrap_or(0),
+            cached_tokens: parsed
+                .usage
+                .as_ref()
+                .map(|u| u.cached_tokens())
+                .unwrap_or(0),
         })
     }
 
