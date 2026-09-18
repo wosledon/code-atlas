@@ -2,7 +2,7 @@
 
 use crate::types::LlmTurn;
 use crate::wire::{StreamChunk, StreamToolCallDelta};
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -128,27 +128,25 @@ impl StreamAccum {
 
     fn apply_tool_delta(&mut self, tc: &StreamToolCallDelta) {
         let idx = tc.index.unwrap_or(0);
-        if self.tools.is_empty() {
-            // The model is about to call a tool, so whatever it streamed before
-            // this was narration ("let me read X"), not page text. Drop it now
-            // instead of waiting for the round to close: a tool call takes long
-            // enough for a live preview to show it.
-            emit_round_end(false);
-        }
+        // Text that arrived before this call stays in `text`: a streaming model
+        // writes the page while it reads, so that text is page content, not
+        // narration. The caller decides whether it is worth keeping.
         let slot = self.tools.entry(idx).or_default();
         if let Some(id) = &tc.id
-            && !id.is_empty() {
-                slot.id = id.clone();
-            }
+            && !id.is_empty()
+        {
+            slot.id = id.clone();
+        }
         if let Some(f) = &tc.function {
             if let Some(n) = &f.name
-                && !n.is_empty() {
-                    if slot.name.is_empty() {
-                        slot.name = n.clone();
-                    } else {
-                        slot.name.push_str(n);
-                    }
+                && !n.is_empty()
+            {
+                if slot.name.is_empty() {
+                    slot.name = n.clone();
+                } else {
+                    slot.name.push_str(n);
                 }
+            }
             if let Some(a) = &f.arguments {
                 slot.arguments.push_str(a);
             }
@@ -215,8 +213,12 @@ pub(crate) async fn read_openai_sse(mut resp: reqwest::Response) -> Result<Strea
             if payload.is_empty() || payload == "[DONE]" {
                 continue;
             }
-            let parsed: StreamChunk = serde_json::from_str(payload)
-                .map_err(|e| anyhow!("llm stream chunk is not valid JSON: {e}; body={}", truncate(payload, 200)))?;
+            let parsed: StreamChunk = serde_json::from_str(payload).map_err(|e| {
+                anyhow!(
+                    "llm stream chunk is not valid JSON: {e}; body={}",
+                    truncate(payload, 200)
+                )
+            })?;
             acc.apply_chunk(&parsed);
         }
     }

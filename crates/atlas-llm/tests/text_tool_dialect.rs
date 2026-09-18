@@ -1,5 +1,5 @@
-//! 文本方言工具调用的回归：模型把 `<tool_call><function=read_file>…` 写进正文时，
-//! 客户端必须真的执行它请求的工具，并把转录挡在返回文本之外。
+//! 工具调用与流式写作的回归：模型把 `<tool_call><function=read_file>…` 写进正文时
+//! 必须真的执行它请求的工具；边写边读时，已经写出的正文必须留下。
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -33,9 +33,33 @@ fn dialect_for(path: &str) -> String {
 
 const FINAL: &str = "## 职责\n\n`crates/x.rs:121` 定义了入口函数，供 CLI 调用。\n";
 
+/// One streamed chunk of a fake reply: page text, or a structured tool call.
+#[derive(Clone)]
+enum Part {
+    Text(String),
+    Call { name: String, arguments: String },
+}
+
+/// A reply that is just text.
+fn text(s: &str) -> Vec<Part> {
+    vec![Part::Text(s.to_string())]
+}
+
+/// A reply that streams `prose` and then asks for a file — one round that writes
+/// and reads at once, which is what a streaming model does.
+fn prose_then_call(prose: &str, path: &str) -> Vec<Part> {
+    vec![
+        Part::Text(prose.to_string()),
+        Part::Call {
+            name: "read_file".into(),
+            arguments: json!({ "path": path }).to_string(),
+        },
+    ]
+}
+
 /// Fake OpenAI-compatible endpoint: records every request body and answers the
 /// n-th request with the n-th reply (the last one repeats).
-fn fake_server(replies: Vec<String>, seen: Arc<Mutex<Vec<String>>>) -> String {
+fn fake_server(replies: Vec<Vec<Part>>, seen: Arc<Mutex<Vec<String>>>) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake llm");
     let addr = listener.local_addr().expect("addr");
     std::thread::spawn(move || {
@@ -87,9 +111,23 @@ fn read_request(stream: &mut std::net::TcpStream) -> String {
     String::from_utf8_lossy(&buf).to_string()
 }
 
-fn sse_response(text: &str) -> Vec<u8> {
-    let payload = json!({ "choices": [{ "delta": { "content": text } }] }).to_string();
-    let body = format!("data: {payload}\n\ndata: [DONE]\n\n");
+fn sse_response(parts: &[Part]) -> Vec<u8> {
+    let mut body = String::new();
+    for part in parts {
+        let delta = match part {
+            Part::Text(text) => json!({ "content": text }),
+            Part::Call { name, arguments } => json!({
+                "tool_calls": [{
+                    "index": 0,
+                    "id": "call_0",
+                    "function": { "name": name, "arguments": arguments },
+                }]
+            }),
+        };
+        let payload = json!({ "choices": [{ "delta": delta }] }).to_string();
+        body.push_str(&format!("data: {payload}\n\n"));
+    }
+    body.push_str("data: [DONE]\n\n");
     let head = format!(
         "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\ncontent-length: {}\r\n\r\n",
         body.len()
@@ -140,10 +178,7 @@ fn recorder() -> (Ran, Exec) {
 #[tokio::test]
 async fn text_dialect_tool_request_runs_as_a_real_round() {
     let seen = Arc::new(Mutex::new(Vec::new()));
-    let llm = client(fake_server(
-        vec![DIALECT.to_string(), FINAL.to_string()],
-        seen.clone(),
-    ));
+    let llm = client(fake_server(vec![text(DIALECT), text(FINAL)], seen.clone()));
     let (ran, exec) = recorder();
 
     let resp = llm
@@ -179,8 +214,8 @@ async fn text_dialect_tool_request_runs_as_a_real_round() {
 async fn one_file_per_round_still_reads_a_pages_worth_of_files() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let files = ["a.rs", "b.rs", "c.rs", "d.rs", "e.rs"];
-    let mut replies: Vec<String> = files.iter().map(|f| dialect_for(f)).collect();
-    replies.push(FINAL.to_string());
+    let mut replies: Vec<Vec<Part>> = files.iter().map(|f| text(&dialect_for(f))).collect();
+    replies.push(text(FINAL));
     let llm = client(fake_server(replies, seen.clone()));
     let (ran, exec) = recorder();
 
@@ -221,7 +256,7 @@ async fn one_file_per_round_still_reads_a_pages_worth_of_files() {
 #[tokio::test]
 async fn budget_refusal_tells_the_model_to_write() {
     let seen = Arc::new(Mutex::new(Vec::new()));
-    let llm = client(fake_server(vec![DIALECT.to_string()], seen.clone()));
+    let llm = client(fake_server(vec![text(DIALECT)], seen.clone()));
     let (ran, exec) = recorder();
 
     let resp = llm
@@ -251,11 +286,11 @@ async fn budget_refusal_tells_the_model_to_write() {
     );
 }
 
-/// 一直要文件也有尽头：拒绝到上限就返回现有正文，不会无限转下去。
+/// 一直要文件也有尽头：拒绝到上限就收尾，不会无限转下去。
 #[tokio::test]
 async fn endless_tool_requests_stop_at_the_cap() {
     let seen = Arc::new(Mutex::new(Vec::new()));
-    let llm = client(fake_server(vec![DIALECT.to_string()], seen.clone()));
+    let llm = client(fake_server(vec![text(DIALECT)], seen.clone()));
     let (ran, exec) = recorder();
 
     let resp = llm
@@ -264,19 +299,76 @@ async fn endless_tool_requests_stop_at_the_cap() {
         .expect("chat_with_tools");
 
     assert_eq!(ran.lock().expect("ran").len(), 3, "预算内执行 3 次");
-    // 3 次执行 + 1 次被告知预算已尽 + 1 次再问 + 1 次放弃
+    // 3 次执行 + 1 次被告知预算已尽 + 1 次再问 + 1 次收尾
     assert_eq!(seen.lock().expect("seen").len(), 6);
     assert!(!resp.text.contains("<tool_call"), "{}", resp.text);
     assert!(!resp.text.contains("parameter"), "{}", resp.text);
-    // 走不到正文时也别把已经写出来的那段丢掉（空正文会被上层换成模板）。
-    assert!(resp.text.contains("我来确认一下"), "{}", resp.text);
+    // 这一轮的文本是「我来确认一下」这类旁白，不是页面内容：只执行了工具、
+    // 没写出页面时，返回空正文（由上层判定失败），但绝不能带上转录。
+    assert!(resp.text.is_empty(), "{}", resp.text);
+}
+
+/// 边写边读：同一轮里先流出正文、再请求工具（流式模型的常态）。
+/// 那段正文就是页面内容，必须留下并且只出现一次——丢掉它正是「写了又重写」的根源。
+#[tokio::test]
+async fn prose_streamed_before_a_tool_call_is_kept() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let llm = client(fake_server(
+        vec![
+            prose_then_call("## 职责\n\n第一段：本模块负责解析。", "crates/x.rs"),
+            text(FINAL),
+        ],
+        seen.clone(),
+    ));
+    let (ran, exec) = recorder();
+
+    let resp = llm
+        .chat_with_tools("system", "user", &[read_file_spec()], 2, exec)
+        .await
+        .expect("chat_with_tools");
+
+    assert_eq!(ran.lock().expect("ran").len(), 1, "the tool ran");
+    assert!(resp.text.contains("第一段"), "{}", resp.text);
+    assert!(resp.text.contains("定义"), "{}", resp.text);
+    assert_eq!(
+        resp.text.matches("第一段").count(),
+        1,
+        "the prose must not be duplicated by the following round: {}",
+        resp.text
+    );
+    assert!(!resp.text.contains("<tool_call"), "{}", resp.text);
+}
+
+/// 模型接着上一轮继续写（不重述）：两段都在，顺序不变。
+#[tokio::test]
+async fn prose_continues_across_rounds() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let llm = client(fake_server(
+        vec![
+            prose_then_call("## 职责\n\n第一段。", "crates/x.rs"),
+            text("## 数据流\n\n第二段。"),
+        ],
+        seen.clone(),
+    ));
+    let (ran, exec) = recorder();
+
+    let resp = llm
+        .chat_with_tools("system", "user", &[read_file_spec()], 2, exec)
+        .await
+        .expect("chat_with_tools");
+
+    assert_eq!(ran.lock().expect("ran").len(), 1, "the tool ran");
+    let first = resp.text.find("第一段").expect("first paragraph");
+    let second = resp.text.find("第二段").expect("second paragraph");
+    assert!(first < second, "rounds keep their order: {}", resp.text);
+    assert!(resp.text.contains("## 数据流"), "{}", resp.text);
 }
 
 /// 没有工具可给的普通问答里，转录不能被当成答案交给调用方。
 #[tokio::test]
 async fn plain_chat_drops_the_transcript() {
     let seen = Arc::new(Mutex::new(Vec::new()));
-    let llm = client(fake_server(vec![DIALECT.to_string()], seen));
+    let llm = client(fake_server(vec![text(DIALECT)], seen));
     let resp = llm.chat("system", "user").await.expect("chat");
     assert!(!resp.text.contains("<tool_call"), "{}", resp.text);
     assert!(!resp.text.contains("parameter"), "{}", resp.text);

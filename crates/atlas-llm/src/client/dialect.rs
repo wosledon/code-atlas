@@ -200,9 +200,10 @@ fn parameter_key(after: &str) -> Option<(String, &str)> {
             .map(str::trim_start)
             .and_then(|r| r.strip_prefix('='))
     })?;
-    let rest = rest.trim_start().trim_start_matches('"');
+    let rest = rest.trim_start();
+    let rest = rest.trim_start_matches(['"', '\'']);
     let gt = rest.find('>')?;
-    let key = rest[..gt].trim_end_matches('"').trim();
+    let key = rest[..gt].trim_end_matches(['"', '\'']).trim();
     Some((key.to_string(), &rest[gt + 1..]))
 }
 
@@ -341,6 +342,16 @@ mod tests {
         let args = args(&calls[0]);
         assert_eq!(args["path"], "121");
         assert_eq!(args["start_line"], 121);
+    }
+
+    /// `<parameter name="x">` 是同一方言的另一种写法，键名同样取对。
+    #[test]
+    fn accepts_the_name_attribute_form() {
+        let text = "<function=read_file><parameter name=\"path\">a.rs</parameter><parameter name='start_line'>7</parameter></function>";
+        let (calls, _) = resolve(text, Vec::new(), &specs(), "t");
+        let args = args(&calls[0]);
+        assert_eq!(args["path"], "a.rs");
+        assert_eq!(args["start_line"], 7);
     }
 
     /// 没有闭合标记的调用不还原：猜错的参数会被真的执行。

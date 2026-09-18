@@ -20,10 +20,65 @@ const BUDGET_REFUSALS: usize = 2;
 const BUDGET_SPENT: &str = "ERROR: 本页的工具调用预算已用尽，不会再执行新的工具调用。\
 请立即用已经读到的内容直接输出页面 markdown 正文，不要再输出任何工具调用标签（<tool_call> / <function=）。";
 
+/// Fold one round's prose into the page being written. Returns whether that text
+/// became part of the body.
+///
+/// A streaming model writes while it reads: the round that asks for a file can
+/// carry real page text, and dropping it is what made pages restart after every
+/// read. Two shapes are not page text:
+/// - a tool round whose prose has no markdown structure at all is narration
+///   ("让我先读一下 X"), so it is not pasted on top of the page;
+/// - text that restates what is already there (models re-send their answer,
+///   whole or as a tail, after a tool result) replaces it instead of being
+///   appended, which would duplicate the page.
+fn merge_prose(body: &mut String, prose: &str, is_tool_round: bool) -> bool {
+    let prose = prose.trim();
+    if prose.is_empty() {
+        return false;
+    }
+    if is_tool_round && !looks_like_page(prose) {
+        return false;
+    }
+    let current = body.trim();
+    if current.is_empty() || prose.contains(current) {
+        *body = prose.to_string();
+    } else if !current.ends_with(prose) {
+        if !body.ends_with('\n') {
+            body.push('\n');
+        }
+        // A continued sentence must not be split, but a new block (heading,
+        // table, list) needs the blank line markdown gives it everywhere else.
+        if looks_like_page(prose) && !body.ends_with("\n\n") {
+            body.push('\n');
+        }
+        body.push_str(prose);
+    }
+    true
+}
+
+/// Whether `text` already carries the shape of a page (a heading, table, list,
+/// fence, quote) rather than a line about the work.
+fn looks_like_page(text: &str) -> bool {
+    text.lines().any(|line| {
+        let t = line.trim_start();
+        t.starts_with('#')
+            || t.starts_with('|')
+            || t.starts_with("- ")
+            || t.starts_with("* ")
+            || t.starts_with("```")
+            || t.starts_with('>')
+    })
+}
+
 impl LlmClient {
     /// Ask the model to write something while letting it call read-only tools
     /// (`read_file`, `list_files`, `grep`, ...) to pull in only the source it
     /// needs, instead of receiving the whole repository up front.
+    ///
+    /// Reading and writing are not separate phases: a streaming model keeps
+    /// writing while it reads, so prose and tool calls arrive in the same round.
+    /// The returned text is every prose segment in order — the page it was
+    /// writing ([`merge_prose`]) — not just the last round's answer.
     ///
     /// `exec` runs one tool call and returns the text handed back to the model.
     /// Errors thrown by `exec` are reported to the model as `ERROR: ...` so it
@@ -55,17 +110,16 @@ impl LlmClient {
         let mut executed = 0usize;
         let mut refusals = 0usize;
         let mut round = 0usize;
-        // Longest prose a round produced. A model stuck on reads may still have
-        // written part of the page, and that text beats the empty body a caller
-        // replaces with a structural template.
-        let mut best_prose = String::new();
+        // The page as it is being written. A streaming model keeps writing while
+        // it reads, so prose and tool calls arrive in the same round and this
+        // accumulates across rounds instead of being reset by the call that
+        // interrupted the writing.
+        let mut body = String::new();
 
         loop {
             // Nothing is offered once the budget is spent; the model is told why
             // in the answer to the call it asks for anyway (below).
             let offer: &[ToolSpec] = if executed < budget { tools } else { &[] };
-            // Text a round emits before asking for a tool is usually narration
-            // ("let me read X"); it is discarded below so it never reaches the page.
             sse::emit_round_start();
             let LlmTurn {
                 text: raw,
@@ -78,14 +132,16 @@ impl LlmClient {
             // Some models ask for tools as text (`<tool_call><function=read_file>
             // <parameter=path>…`) rather than through `tool_calls[]`; run what
             // they asked for so the transcript never reaches the caller.
-            let (calls, text) = dialect::resolve(&raw, tool_calls, tools, &round.to_string());
+            let (calls, prose) = dialect::resolve(&raw, tool_calls, tools, &round.to_string());
             round += 1;
-            if calls.is_empty() {
-                // Keep the streamed text only when nothing was dropped: a
-                // transcript we could not run must not stay in a draft either.
-                sse::emit_round_end(text == raw);
+            let is_tool_round = !calls.is_empty();
+            let merged = merge_prose(&mut body, &prose, is_tool_round);
+            // Keep what was streamed in the draft on disk only when it is page
+            // text: a transcript we could not run must not stay there either.
+            sse::emit_round_end(merged && prose == raw);
+            if !is_tool_round {
                 return Ok(LlmResponse {
-                    text,
+                    text: body,
                     usage: LlmUsage {
                         prompt_tokens,
                         completion_tokens,
@@ -93,10 +149,6 @@ impl LlmClient {
                     },
                     model,
                 });
-            }
-            sse::emit_round_end(false);
-            if text.chars().count() > best_prose.chars().count() {
-                best_prose = text.clone();
             }
             if executed >= budget {
                 // `max_rounds = 0` disables tools outright: nothing was promised,
@@ -110,7 +162,7 @@ impl LlmClient {
                         );
                     }
                     return Ok(LlmResponse {
-                        text: best_prose,
+                        text: body,
                         usage: LlmUsage {
                             prompt_tokens,
                             completion_tokens,
@@ -128,7 +180,7 @@ impl LlmClient {
             let calls: Vec<ToolCall> = calls.into_iter().take(CALLS_PER_ROUND).collect();
             messages.push(ChatMessage {
                 role: "assistant".into(),
-                content: (!text.trim().is_empty()).then_some(text),
+                content: (!prose.trim().is_empty()).then_some(prose),
                 tool_calls: Some(
                     calls
                         .iter()
