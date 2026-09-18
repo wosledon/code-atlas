@@ -418,6 +418,64 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// 记号必须**夹住**它标注的那些行。
+    ///
+    /// 块从整窗开头铺满时，把记号写早一行也「看起来对」——所以这条用夹在中间的块，
+    /// 并且额外验一次**区间读**：记号若用窗口下标而非绝对行号，`start_line=6` 会让
+    /// 记号全挤到窗口顶部。
+    #[test]
+    fn hoist_markers_bracket_exactly_the_stripped_lines() {
+        let dir = std::env::temp_dir().join(format!("atlas-tools-bracket-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        // 第 6–17 行（8 空格）构成块；第 1–5、18–22 行是块外的零缩进行。
+        let mut src = String::from("use a;\nuse b;\nuse c;\nuse d;\nuse e;\n");
+        for i in 6..=17 {
+            src.push_str(&format!("        let v{i} = {i};\n"));
+        }
+        src.push_str("fn tail() {}\nuse f;\nuse g;\nuse h;\nuse i;\n");
+        std::fs::write(dir.join("src/block.rs"), &src).unwrap();
+        let t = tools(&dir);
+
+        let out = t
+            .call("read_file", "{\"path\":\"src/block.rs\",\"start_line\":1}")
+            .unwrap();
+        let lines: Vec<&str> = out.lines().collect();
+        let begin = lines
+            .iter()
+            .position(|l| l.starts_with("// begin:"))
+            .unwrap();
+        let end = lines.iter().position(|l| l.starts_with("// end")).unwrap();
+        // 紧邻：`// begin` 的下一行就是块首（第 6 行），`// end` 的上一行就是块尾（第 17 行）。
+        assert!(
+            lines[begin + 1].starts_with(" 6|"),
+            "块首应是第 6 行：{out}"
+        );
+        assert!(lines[end - 1].starts_with("17|"), "块尾应是第 17 行：{out}");
+        // 块内缩进被剥掉、块外原样保留——夹错一行就会在这里露出来。
+        assert_eq!(lines[begin + 1], " 6| let v6 = 6;", "{out}");
+        assert_eq!(lines[end - 1], "17| let v17 = 17;", "{out}");
+        assert_eq!(lines[begin - 1], " 5| use e;", "{out}");
+        assert_eq!(lines[end + 1], "18| fn tail() {}", "{out}");
+
+        // 区间读：窗口从第 6 行开始，记号仍要夹住第 6–17 行。
+        let ranged = t
+            .call(
+                "read_file",
+                "{\"path\":\"src/block.rs\",\"start_line\":6,\"end_line\":17}",
+            )
+            .unwrap();
+        let lines: Vec<&str> = ranged.lines().collect();
+        let begin = lines
+            .iter()
+            .position(|l| l.starts_with("// begin:"))
+            .unwrap();
+        let end = lines.iter().position(|l| l.starts_with("// end")).unwrap();
+        assert_eq!(lines[begin + 1], " 6| let v6 = 6;", "{ranged}");
+        assert_eq!(lines[end - 1], "17| let v17 = 17;", "{ranged}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// 同一文件被多页读到时不重复读盘：本次运行内返回第一次的快照。
     #[test]
     fn identical_calls_hit_the_snapshot_cache() {

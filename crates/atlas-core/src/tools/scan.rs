@@ -102,12 +102,14 @@ impl RepoTools {
         let clipped: Vec<String> = lines[from - 1..to].iter().map(|l| clip(l)).collect();
         let window: Vec<&str> = clipped.iter().map(String::as_str).collect();
         // 缩进外提（可逆、按块、按语言开闸）：缩进占 tsx/rs/json 字数的 10–24%，
-        // 按块外提实测能省 6.5%（整窗只有 2.6%——真实读窗口常从 0 缩进行开始）。
-        // 缩进即语法的语言与跨行字符串窗口由 `hoist_allowed` 拦下：误压会改语义。
+        // 按块外提实测能省 6.2%（整窗只有 2.6%——真实读窗口常从 0 缩进行开始）。
+        // 语言白名单挡住缩进即语法的语言；跨行字符串内的行由 `string_lines` 逐行标出、
+        // 块会绕开它们（Go 原生字符串里的 SQL、JS 模板字符串里的片段都是内容）。
         let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
         let joined = window.join("\n");
         let blocks = if compress::hoist_allowed(&ext, &joined) {
-            compress::indent_blocks(&window)
+            let blocked = compress::string_lines(&window, &ext);
+            compress::indent_blocks(&window, &blocked)
         } else {
             Vec::new()
         };
@@ -118,27 +120,51 @@ impl RepoTools {
         // 行号栏收窄到实际需要的宽度：固定 `{:>5}` 在 3 位数文件上白付 2 字符/行，
         // 实测那占了全仓字符的 20%（收窄后省 5.8%）。
         let width = to.to_string().len();
+        let mut rows: Vec<(usize, String)> = Vec::with_capacity(window.len());
+        // 记号与行号同一坐标系（**绝对行号**）：缓冲后统一按行号排序吐出，
+        // 所以这里必须写 `from + i`——用窗口下标会让记号整体前移 `from` 行。
+        let mut markers: Vec<(usize, String)> = Vec::new();
         let mut next = 0usize;
         for (i, line) in window.iter().enumerate() {
-            let block = blocks.get(next).filter(|b| b.start == i);
-            if let Some(block) = block {
-                out.push_str(&compress::block_start_marker(block.indent));
-                out.push('\n');
+            if let Some(block) = blocks.get(next).filter(|b| b.start == i) {
+                markers.push((from + i, compress::block_start_marker(block.indent)));
             }
             let in_block = blocks.get(next).filter(|b| i >= b.start && i < b.end);
             let body = match in_block {
                 Some(b) => compress::strip_indent(line, b.indent),
                 None => *line,
             };
-            // 记号行不占行号：给了行号会让下面每行偏 1，而模型正是按行号引用的。
-            out.push_str(&format!("{:>width$}| {body}\n", from + i));
+            rows.push((from + i, body.to_string()));
             if let Some(b) = blocks.get(next)
                 && b.end == i + 1
             {
-                out.push_str(compress::BLOCK_END);
-                out.push('\n');
+                // 结束记号落在块的**后一行**：它要排在最后一行之后，否则末行会
+                // 显示在「块外」，读者按记号补回缩进时就漏掉它。
+                markers.push((from + i + 1, compress::BLOCK_END.to_string()));
                 next += 1;
             }
+        }
+        // 重复行折叠（可逆）：生成代码里成片的 `_ = fileDescriptor`、数据里成片的同形
+        // 条目才触发；保留行仍用**原始行号**，所以 `path:line` 引用不会失效，跳号本身
+        // 就是「这里折了 N 行」的信号。
+        let (rows, folded) = compress::fold_identical_runs(rows);
+        if folded > 0 {
+            self.note_saved(folded);
+        }
+        // 记号行不占行号：给了行号会让下面每行偏 1，而模型正是按行号引用的。
+        for (i, body) in rows {
+            while let Some((at, marker)) = markers.first()
+                && *at <= i
+            {
+                out.push_str(marker);
+                out.push('\n');
+                markers.remove(0);
+            }
+            out.push_str(&format!("{i:>width$}| {body}\n"));
+        }
+        for (_, marker) in markers {
+            out.push_str(&marker);
+            out.push('\n');
         }
         Ok(out)
     }
