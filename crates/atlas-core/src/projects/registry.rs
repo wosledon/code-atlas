@@ -109,10 +109,10 @@ impl ProjectRegistry {
                 found.push(entry);
             }
         }
-        if !found.is_empty() {
-            if let Err(e) = self.save() {
-                tracing::warn!("failed to persist discovered projects: {e:#}");
-            }
+        if !found.is_empty()
+            && let Err(e) = self.save()
+        {
+            tracing::warn!("failed to persist discovered projects: {e:#}");
         }
         found
     }

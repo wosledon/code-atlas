@@ -2,15 +2,18 @@ use super::*;
 
 use super::plan::plan_pages;
 use super::plan_modules::detect_code_modules;
-use super::outline::{commands, manifest_summary, source_outline};
+use super::outline::{
+    build_outline_cache, commands, manifest_summary, source_outline_from_cache, OutlineCache,
+};
 
 /// Evidence fragments identical for every page in one run (built once).
 pub(crate) struct EvidenceShared {
     header: String,
     docs_section: String,
+    outlines: OutlineCache,
 }
 
-/// Build the shared evidence header + wiki index once per run.
+/// Build the shared evidence header + wiki index + source-outline cache once per run.
 pub(crate) fn build_evidence_shared(scan: &RepoScan, plan: &[PlannedPage]) -> EvidenceShared {
     let mut header = String::new();
     header.push_str("## Repository\n");
@@ -53,7 +56,11 @@ pub(crate) fn build_evidence_shared(scan: &RepoScan, plan: &[PlannedPage]) -> Ev
     for p in docs.iter().take(12) {
         docs_section.push_str(&format!("- [{}]({}) — {}\n", p.title, p.rel_path, p.description));
     }
-    EvidenceShared { header, docs_section }
+    EvidenceShared {
+        header,
+        docs_section,
+        outlines: build_outline_cache(scan),
+    }
 }
 
 /// Compact repository map handed to the model together with the file/read
@@ -96,7 +103,7 @@ pub(crate) fn build_evidence_with_shared(
         }
         out.push_str(&format!("- {} ({}, {} B)\n", f.rel, lang_of(f), f.size));
     }
-    out.push_str(&source_outline(scan, page));
+    out.push_str(&source_outline_from_cache(&shared.outlines, scan, page));
     out.push_str(&shared.docs_section);
     out
 }

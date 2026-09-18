@@ -23,8 +23,11 @@ import {
   type Project,
   type ProjectsResponse,
 } from "../lib/api";
+import { useProject } from "../lib/projectContext";
+import { withProject } from "../lib/routes";
 
 type Config = {
+  project?: string;
   provider: string;
   model: string;
   base_url: string;
@@ -38,6 +41,7 @@ type Config = {
 };
 
 export default function SettingsPage() {
+  const { projectId } = useProject();
   const [cfg, setCfg] = useState<Config | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [newRoot, setNewRoot] = useState("");
@@ -47,7 +51,7 @@ export default function SettingsPage() {
   const [busy, setBusy] = useState(false);
 
   const load = () =>
-    api<Config>("/api/config")
+    api<Config>(withProject("/api/config", projectId))
       .then(setCfg)
       .catch((e) => setErr(String(e)));
 
@@ -60,7 +64,8 @@ export default function SettingsPage() {
   useEffect(() => {
     load();
     loadProjects();
-  }, [loadProjects]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, loadProjects]);
 
   const save = async () => {
     if (!cfg) return;
@@ -79,9 +84,10 @@ export default function SettingsPage() {
           language: cfg.language,
           chunk_mode: cfg.chunk_mode,
           strategy: cfg.strategy,
+          project: projectId || undefined,
         }),
       });
-      setMsg("已写入 atlas.toml（不含密钥）。重启 atlas web 后新会话生效。");
+      setMsg(`已写入项目「${projectId || "default"}」的 atlas.toml（不含密钥）。`);
     } catch (e) {
       setErr(String(e));
     } finally {

@@ -1,16 +1,34 @@
 use super::*;
 use crate::auth::{authorized, deny};
+use crate::common::{err, resolve_project};
+use axum::extract::Query as AxQuery;
 
-pub(crate) async fn health(State(state): State<AppState>, headers: HeaderMap) -> Response {
+/// Health for the active project (launch project when `project` is omitted).
+pub(crate) async fn health(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxQuery(q): AxQuery<std::collections::HashMap<String, String>>,
+) -> Response {
     if !authorized(&state, &headers) {
         return deny();
     }
+    let pref = match resolve_project(&state, q.get("project").map(|s| s.as_str())) {
+        Ok(p) => p,
+        Err(e) => return err(e),
+    };
     Json(json!({
         "ok": true,
-        "atlas_root": state.atlas_root.display().to_string(),
-        "language": state.cfg.output.language,
-        "provider": state.cfg.llm.provider,
-        "model": state.cfg.llm.model,
+        "project": pref.id,
+        "is_launch": pref.is_launch,
+        "atlas_root": pref.atlas_root.display().to_string(),
+        "language": pref.cfg.output.language,
+        "provider": pref.cfg.llm.provider,
+        "model": pref.cfg.llm.model,
+        "registry_path": state
+            .projects
+            .read()
+            .map(|g| g.registry_path().display().to_string())
+            .unwrap_or_default(),
     }))
     .into_response()
 }

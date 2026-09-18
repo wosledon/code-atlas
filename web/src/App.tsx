@@ -32,6 +32,7 @@ import ReaderPage from "./pages/Reader";
 import SettingsPage from "./pages/Settings";
 import { globalMotion } from "./theme/motion.css";
 import { api } from "./lib/api";
+import { withProject } from "./lib/routes";
 import { ProjectProvider, useProject } from "./lib/projectContext";
 
 const drawerWidth = 240;
@@ -217,14 +218,17 @@ function AppShell() {
 }
 
 function useHealth() {
+  const { projectId } = useProject();
   const [health, setHealth] = useState<{ model?: string; provider?: string } | null>(null);
   useEffect(() => {
     const url = new URLSearchParams(window.location.search).get("t");
     if (url) localStorage.setItem("atlas_token", url);
-    api<{ model: string; provider: string }>("/api/health")
+    api<{ model: string; provider: string; project?: string }>(
+      withProject("/api/health", projectId)
+    )
       .then(setHealth)
       .catch(() => setHealth(null));
-  }, []);
+  }, [projectId]);
   return [health, setHealth] as const;
 }
 

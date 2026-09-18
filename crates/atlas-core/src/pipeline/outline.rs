@@ -9,7 +9,8 @@
 use super::evidence::{lang_of, run_commands, scoped_files};
 use super::*;
 
-use atlas_analyze::file_outline;
+use atlas_analyze::{file_outline, OutlineItem, SourceFile};
+use std::collections::HashMap;
 
 /// 每个页面最多展开多少个文件、每个文件最多列多少个声明。
 /// 这段证据会随每一轮工具调用重复计费，宁可少列、让模型按需 `read_file`。
@@ -20,8 +21,51 @@ const MAX_CHARS: usize = 4200;
 /// 读取文件时只看前这么多字节（声明都在文件前部）。
 const EXCERPT_BYTES: usize = 60_000;
 
+/// Precompute one outline line per source file (once per run).
+/// Avoids re-reading the same files for every planned page.
+pub(crate) type OutlineCache = HashMap<String, String>;
+
+pub(crate) fn build_outline_cache(scan: &RepoScan) -> OutlineCache {
+    let mut cache = OutlineCache::new();
+    for f in scan.files.iter().filter(|f| f.language.is_some()) {
+        let source = read_file_excerpt(&f.path, EXCERPT_BYTES);
+        let items = file_outline(f, &source);
+        cache.insert(f.rel.clone(), outline_line(f, &items));
+    }
+    cache
+}
+
+fn outline_line(f: &SourceFile, items: &[OutlineItem]) -> String {
+    if items.is_empty() {
+        return format!("- `{}` ({})\n", f.rel, lang_of(f));
+    }
+    let decls: Vec<String> = items
+        .iter()
+        .take(MAX_ITEMS_PER_FILE)
+        .map(|i| format!("`{}` {} {}", i.line, i.kind, i.name))
+        .collect();
+    format!(
+        "- `{}` ({}, {} B): {}\n",
+        f.rel,
+        lang_of(f),
+        f.size,
+        decls.join(" · ")
+    )
+}
+
 /// 范围内文件的声明索引。大文件优先（更可能是核心实现）。
+/// Prefer [`source_outline_from_cache`] in run paths (one disk scan per run).
+#[allow(dead_code)]
 pub(crate) fn source_outline(scan: &RepoScan, page: &PlannedPage) -> String {
+    let cache = build_outline_cache(scan);
+    source_outline_from_cache(&cache, scan, page)
+}
+
+pub(crate) fn source_outline_from_cache(
+    cache: &OutlineCache,
+    scan: &RepoScan,
+    page: &PlannedPage,
+) -> String {
     let mut files = scoped_files(scan, page);
     files.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.rel.cmp(&b.rel)));
     let mut out = String::from("\n## Source outline (declarations with line numbers)\n");
@@ -33,24 +77,13 @@ pub(crate) fn source_outline(scan: &RepoScan, page: &PlannedPage) -> String {
             out.push_str("- … (more files omitted; use list_files / grep)\n");
             break;
         }
-        let source = read_file_excerpt(&f.path, EXCERPT_BYTES);
-        let items = file_outline(f, &source);
-        if items.is_empty() {
-            out.push_str(&format!("- `{}` ({})\n", f.rel, lang_of(f)));
-            continue;
+        match cache.get(&f.rel) {
+            Some(line) => out.push_str(line),
+            None => out.push_str(&outline_line(f, &file_outline(
+                f,
+                &read_file_excerpt(&f.path, EXCERPT_BYTES),
+            ))),
         }
-        let decls: Vec<String> = items
-            .iter()
-            .take(MAX_ITEMS_PER_FILE)
-            .map(|i| format!("`{}` {} {}", i.line, i.kind, i.name))
-            .collect();
-        out.push_str(&format!(
-            "- `{}` ({}, {} B): {}\n",
-            f.rel,
-            lang_of(f),
-            f.size,
-            decls.join(" · ")
-        ));
     }
     if files.is_empty() {
         out.push_str("- (no source files in scope)\n");

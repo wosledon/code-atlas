@@ -117,6 +117,34 @@ async fn unknown_project_id_is_error() {
 }
 
 #[tokio::test]
+async fn health_and_config_accept_project_query() {
+    let launch = temp_dir("cfg");
+    let app = test_app(&launch);
+
+    let res = app
+        .clone()
+        .oneshot(auth_req("GET", "/api/health?project=default"))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let v = body_json(res).await;
+    assert_eq!(v["project"].as_str().unwrap_or_default(), launch.file_name().unwrap().to_string_lossy());
+    assert!(v["is_launch"].as_bool().unwrap_or(false), "{v}");
+
+    let res = app
+        .clone()
+        .oneshot(auth_req("GET", "/api/config?project=default"))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let v = body_json(res).await;
+    assert!(v["project"].is_string(), "{v}");
+    assert!(v["atlas_root"].is_string(), "{v}");
+
+    fs::remove_dir_all(&launch).ok();
+}
+
+#[tokio::test]
 async fn update_unknown_project_errors() {
     let launch = temp_dir("upd");
     let app = test_app(&launch);
