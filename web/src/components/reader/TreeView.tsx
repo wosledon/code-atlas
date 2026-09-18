@@ -57,7 +57,9 @@ export function TreeView({
     );
   }
 
-  const open = expanded[node.id] ?? depth < 2;
+  // `expanded` holds every folder's state (`Reader` seeds the default-open ones),
+  // so an absent key means closed — never a depth-based fallback.
+  const open = expanded[node.id] ?? false;
   return (
     <>
       <ListItemButton

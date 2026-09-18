@@ -43,6 +43,27 @@ export function collectFolderIds(n: TreeNode | null, out: string[] = []): string
   return out;
 }
 
+/**
+ * Folders open before the reader touches anything: the top `maxDepth` levels, so
+ * the shape of the wiki is visible at a glance.
+ *
+ * This has to be state, not a fallback in the renderer: a `expanded[id] ?? depth
+ * < 2` default cannot be told apart from an explicit `false`, so the first click
+ * on a default-open folder computed `!undefined` = `true` and appeared dead, and
+ * "collapse all" (which cleared the map) fell straight back to open.
+ */
+export function defaultExpanded(
+  node: TreeNode | null,
+  maxDepth = 2,
+  depth = 0,
+  out: Record<string, boolean> = {}
+): Record<string, boolean> {
+  if (!node) return out;
+  if (!node.path && node.children?.length && depth < maxDepth) out[node.id] = true;
+  for (const ch of node.children || []) defaultExpanded(ch, maxDepth, depth + 1, out);
+  return out;
+}
+
 export function basename(p: string): string {
   const parts = p.split("/");
   return parts[parts.length - 1] || p;

@@ -24,6 +24,7 @@ import {
   collectFolderIds,
   countNodes,
   defaultEntry,
+  defaultExpanded,
   encodePath,
   type TreeNode,
 } from "../components/reader/treeUtils";
@@ -82,10 +83,11 @@ export default function ReaderPage() {
         treeRef.current = t;
         const deepLinked = currentRef.current;
         if (deepLinked) {
-          setExpanded(ancestorsOf(t, deepLinked));
+          setExpanded({ ...defaultExpanded(t), ...ancestorsOf(t, deepLinked) });
           void loadPage(deepLinked, false);
           return;
         }
+        setExpanded(defaultExpanded(t));
         const entry = defaultEntry(t);
         if (entry) void loadPage(entry);
       })
@@ -193,7 +195,7 @@ export default function ReaderPage() {
           onToggle={(id) => setExpanded((e) => ({ ...e, [id]: !e[id] }))}
           onSelect={loadPage}
           onExpandAll={() => setExpanded(Object.fromEntries(folderIds.map((id) => [id, true])))}
-          onCollapseAll={() => setExpanded({})}
+          onCollapseAll={() => setExpanded(Object.fromEntries(folderIds.map((id) => [id, false])))}
         />
 
         <Box
