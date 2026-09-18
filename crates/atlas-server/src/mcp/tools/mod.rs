@@ -31,22 +31,15 @@ pub(crate) struct McpCtx {
     pub(crate) atlas_root: PathBuf,
     /// Cached registry; hot-reloaded via mtime on each resolve.
     pub(crate) projects: Mutex<ProjectRegistry>,
-    /// Default project id when a tool omits `project` (`ATLAS_DEFAULT_PROJECT`).
-    pub(crate) default_project: Option<String>,
 }
 
+/// Resolve a project for an MCP tool.
+/// `project` omitted/empty → launch repo (`default` alias). No hidden env default.
 pub(crate) fn resolve_ctx_project(ctx: &McpCtx, project: Option<&str>) -> Result<ProjectRef> {
     let mut reg = ctx.projects.lock().unwrap_or_else(|e| e.into_inner());
     reg.refresh_if_changed();
     reg.discover_throttled();
-    let explicit = project.map(str::trim).filter(|s| !s.is_empty());
-    let id = explicit.or_else(|| {
-        ctx.default_project
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-    });
-    reg.resolve(id)
+    reg.resolve(project)
 }
 
 pub(crate) fn list_registry(ctx: &McpCtx) -> ProjectRegistry {

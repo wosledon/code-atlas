@@ -20,16 +20,11 @@ const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub async fn serve_stdio(repo_root: PathBuf, cfg: AtlasConfig) -> Result<()> {
     let atlas_root = cfg.atlas_root(&repo_root);
     let projects = ProjectRegistry::load_with_discovery(&repo_root);
-    let default_project = std::env::var("ATLAS_DEFAULT_PROJECT")
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
     let ctx = McpCtx {
         repo_root,
         cfg,
         atlas_root,
         projects: std::sync::Mutex::new(projects),
-        default_project,
     };
     let stdin = tokio::io::stdin();
     let mut reader = BufReader::new(stdin);

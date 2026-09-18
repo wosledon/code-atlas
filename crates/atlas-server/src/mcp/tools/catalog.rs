@@ -68,7 +68,7 @@ pub(crate) fn tool_defs() -> Value {
                 "project": {"type": "string", "description": "project id from atlas_list_projects; default = launch repo"}
             }
         })),
-        tool("atlas_write_page", "Create or overwrite one wiki markdown page under a project's atlas root. Body may include YAML front matter (`---` ... `---`); if omitted, type/title/description arguments are used. Optionally reindexes the KB. `project` defaults to ATLAS_DEFAULT_PROJECT or the launch repo.", json!({
+        tool("atlas_write_page", "Create or overwrite one wiki markdown page under a project's atlas root. Body may include YAML front matter (`---` ... `---`); if omitted, type/title/description arguments are used. Optionally reindexes the KB. Omit `project` to target the launch repo; pass `project` from atlas_list_projects for another wiki.", json!({
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": "relative path under atlas root, e.g. 03-模块详解/foo.md"},

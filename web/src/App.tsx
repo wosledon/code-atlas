@@ -103,7 +103,13 @@ function AppShell() {
             <Chip
               size="small"
               variant="outlined"
-              label={`${health.provider || "-"} · ${health.model || "-"}`}
+              label={[
+                health.project,
+                health.provider || "-",
+                health.model || "-",
+              ]
+                .filter(Boolean)
+                .join(" · ")}
               sx={{ mr: 1 }}
             />
           )}
@@ -219,11 +225,15 @@ function AppShell() {
 
 function useHealth() {
   const { projectId } = useProject();
-  const [health, setHealth] = useState<{ model?: string; provider?: string } | null>(null);
+  const [health, setHealth] = useState<{
+    project?: string;
+    model?: string;
+    provider?: string;
+  } | null>(null);
   useEffect(() => {
     const url = new URLSearchParams(window.location.search).get("t");
     if (url) localStorage.setItem("atlas_token", url);
-    api<{ model: string; provider: string; project?: string }>(
+    api<{ project?: string; model?: string; provider?: string }>(
       withProject("/api/health", projectId)
     )
       .then(setHealth)
