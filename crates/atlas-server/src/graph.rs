@@ -1,5 +1,4 @@
 use super::*;
-use crate::auth::{authorized, deny};
 use crate::common::{err, open_project_store, resolve_project};
 use serde::Serialize;
 
@@ -16,12 +15,8 @@ fn project_from_query(state: &AppState, q: &std::collections::HashMap<String, St
 
 pub(crate) async fn list_entities(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Query(q): Query<std::collections::HashMap<String, String>>,
 ) -> Response {
-    if !authorized(&state, &headers) {
-        return deny();
-    }
     let pref = match project_from_query(&state, &q) {
         Ok(p) => p,
         Err(e) => return err(e),
@@ -38,12 +33,8 @@ pub(crate) async fn list_entities(
 
 pub(crate) async fn graph_nodes(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Query(q): Query<std::collections::HashMap<String, String>>,
 ) -> Response {
-    if !authorized(&state, &headers) {
-        return deny();
-    }
     let pref = match project_from_query(&state, &q) {
         Ok(p) => p,
         Err(e) => return err(e),
@@ -86,13 +77,9 @@ pub(crate) async fn graph_nodes(
 
 pub(crate) async fn neighborhood(
     State(state): State<AppState>,
-    headers: HeaderMap,
     AxPath(id): AxPath<String>,
     Query(q): Query<std::collections::HashMap<String, String>>,
 ) -> Response {
-    if !authorized(&state, &headers) {
-        return deny();
-    }
     let pref = match project_from_query(&state, &q) {
         Ok(p) => p,
         Err(e) => return err(e),

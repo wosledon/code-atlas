@@ -1,20 +1,7 @@
-const TOKEN_KEY = "atlas_token";
-const AUTH_SCHEME = "Bearer";
-
-export function getToken(): string {
-  const url = new URLSearchParams(window.location.search).get("t");
-  if (url) {
-    localStorage.setItem(TOKEN_KEY, url);
-    return url;
-  }
-  return localStorage.getItem(TOKEN_KEY) || "";
-}
-
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
     headers: {
-      Authorization: `${AUTH_SCHEME} ${getToken()}`,
       ...(init?.headers || {}),
     },
   });
@@ -206,7 +193,6 @@ export async function streamApi(
   const res = await fetch(path, {
     ...init,
     headers: {
-      Authorization: `${AUTH_SCHEME} ${getToken()}`,
       Accept: "text/event-stream",
       ...(init?.headers || {}),
     },

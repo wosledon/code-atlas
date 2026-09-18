@@ -138,28 +138,15 @@ a { color: #1a6fb5; }
   <p>本地知识库 / 图谱 / Wiki。完整 React + MD3 界面未编入本二进制；此页为内置回退 UI。</p>
   <p>构建完整 UI：<code>cd web && npm run build</code> 后重新 <code>cargo build -p atlas-cli</code>，或用 <code>--web-dist</code> 指向 dist。</p>
   <p>
-    <input id="token" placeholder="token (from URL ?t=)" size="28" />
-    <button onclick="saveToken()">保存</button>
-    <button onclick="load()">刷新</button>
-  </p>
-  <p>
     <input id="q" placeholder="搜索知识库…" size="36" />
     <button onclick="search()">搜索</button>
+    <button onclick="load()">刷新</button>
   </p>
   <pre id="out">加载中…</pre>
 </main>
 <script>
-function token() {
-  const u = new URLSearchParams(location.search).get('t');
-  if (u) { localStorage.setItem('atlas_token', u); return u; }
-  return localStorage.getItem('atlas_token') || '';
-}
-function saveToken() {
-  localStorage.setItem('atlas_token', document.getElementById('token').value.trim());
-  load();
-}
 async function api(path) {
-  const r = await fetch(path, { headers: { Authorization: 'Bearer ' + token() } });
+  const r = await fetch(path);
   return r.json();
 }
 async function load() {
@@ -172,7 +159,6 @@ async function search() {
   const res = await api('/api/kb/search?q=' + encodeURIComponent(q));
   document.getElementById('out').textContent = JSON.stringify(res, null, 2);
 }
-document.getElementById('token').value = token();
 load();
 </script>
 </body>

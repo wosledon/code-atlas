@@ -221,7 +221,7 @@ strategy = "in-repo"
 - **Grid system:** 阅读页单栏 `720px`；Visualizer 为 MD3 NavigationRail + 流体图谱 + 可选阅读面板。
 - **Motion rules:** ease-out `150–200ms`；尊重 `prefers-reduced-motion`；仅限节点高亮、面板、Snackbar。
 - **Markdown medium:** 页最大可读宽度约 `720px`；front matter 必填 `type`；内部链接优先相对路径。
-- **本地进程形态:** `atlas web` 在 `127.0.0.1` 提供 REST/JSON + 静态前端；默认 token Cookie，不暴露公网；写路径过单写者锁（见 §K）。
+- **本地进程形态:** `atlas web` 在 `0.0.0.0` 提供 REST/JSON + 静态前端（打印 `127.0.0.1` / `localhost` 入口），无鉴权；写路径过单写者锁（见 §K）。
 
 ## 7. Anti-Patterns
 
@@ -686,15 +686,13 @@ front_matter_tags = "en"  # tags 保持英文稳定键；title/description 跟 l
 
 `atlas.toml` 可 `analyze.languages = ["rust","ts","py"]`；关闭 LLM 抽取时仍出确定性符号图。
 
-### K.5 本地 API 鉴权
+### K.5 本地 API 访问
 
-- 默认绑定 `127.0.0.1`；**同机浏览器**访问需短时 **session token**：
-  - `atlas web` 启动时生成随机 token，打印 `http://127.0.0.1:4321/?t=<token>`，并设 `HttpOnly` Cookie。
-  - 前端后续 REST 带 Cookie；纯 API 客户端用 `Authorization: Bearer <token>`。
-- `ATLAS_INSECURE_NO_AUTH=1` 仅调试；默认关闭（CLI 有等价的 `atlas web --insecure`）。
+- **无鉴权**：`atlas web` 不校验 token（本地单用户工具，鉴权只会加长每次访问的路径）。因此 API 对所有能连上端口的人开放，**只在可信网络里跑**。
+- 绑定 `0.0.0.0`（所有网卡），但打印 `http://127.0.0.1:4321/` 与 `http://localhost:4321/`——同机访问用这两个最快，同一局域网的其他设备用本机 IP。
 - 不读仓库内 `.env` 注入前端；Settings 页永不回显密钥。
-- **CORS：** 默认同源；对 `localhost` / `127.0.0.1` 任意端口放行（Vite dev server），其他 Origin 一律不下发 `Access-Control-Allow-Origin`。
-- 不开放 `0.0.0.0`（若 `--host 0.0.0.0` 必须强制 token + 警告）。
+- **CORS：** 默认同源；对 `localhost` / `127.0.0.1` 任意端口放行（Vite dev server），其他 Origin 一律不下发 `Access-Control-Allow-Origin`——无鉴权后这道限制更重要：它拦住其它站点在浏览器里跨源读取本机 API。
+- **风险面（未鉴权 + 全网卡）**：`POST /api/run/update`、`POST /api/kb/chat` 会触发 LLM 调用（花钱），`POST /api/config` 会改写 `atlas.toml`。共享网络（办公室 / 公共 WiFi）下不要开 `atlas web`。
 
 ### K.5a 路径安全（已落地）
 
@@ -781,7 +779,7 @@ atlas plan                 # 预览页面计划，不调用模型
 atlas search "q" [--limit N]   # 检索后端由 kb.search 决定
 atlas status [--last]
 atlas reindex
-atlas web [--port 4321] [--insecure] [--web-dist <dir>]   # 兼容别名：serve
+atlas web [--port 4321] [--web-dist <dir>]   # 兼容别名：serve；无鉴权，绑 0.0.0.0
 atlas export <dir>
 atlas check                # 只读校验：入口页、正文长度、相对链接（退出码非 0 即不通过）
 atlas init-config [--example] [--force]  # 默认写 atlas.toml；--example 写 .example；--force 覆盖

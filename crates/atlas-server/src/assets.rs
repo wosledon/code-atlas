@@ -1,17 +1,12 @@
 use super::*;
-use crate::auth::{authorized, deny};
 use crate::common::{err, resolve_project};
 use axum::extract::Query as AxQuery;
 
 /// Health for the active project (launch project when `project` is omitted).
 pub(crate) async fn health(
     State(state): State<AppState>,
-    headers: HeaderMap,
     AxQuery(q): AxQuery<std::collections::HashMap<String, String>>,
 ) -> Response {
-    if !authorized(&state, &headers) {
-        return deny();
-    }
     let pref = match resolve_project(&state, q.get("project").map(|s| s.as_str())) {
         Ok(p) => p,
         Err(e) => return err(e),

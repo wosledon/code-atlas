@@ -1,5 +1,4 @@
 use super::*;
-use crate::auth::{authorized, deny};
 use crate::common::{err, open_project_store, resolve_project};
 use crate::projects::{run_project_update, UpdateProjectBody};
 use axum::extract::Query as AxQuery;
@@ -14,12 +13,8 @@ pub(crate) struct ProjectQuery {
 
 pub(crate) async fn list_runs(
     State(state): State<AppState>,
-    headers: HeaderMap,
     AxQuery(q): AxQuery<ProjectQuery>,
 ) -> Response {
-    if !authorized(&state, &headers) {
-        return deny();
-    }
     let pref = match resolve_project(&state, q.project.as_deref()) {
         Ok(p) => p,
         Err(e) => return err(e),
@@ -42,12 +37,8 @@ pub(crate) async fn list_runs(
 /// Body may include `project` (default: launch project).
 pub(crate) async fn trigger_update_with_project(
     State(state): State<AppState>,
-    headers: HeaderMap,
     body: Option<Json<UpdateProjectBody>>,
 ) -> Response {
-    if !authorized(&state, &headers) {
-        return deny();
-    }
     let body = body.map(|Json(b)| b).unwrap_or_else(|| UpdateProjectBody {
         mode: "update".into(),
         instruction: None,

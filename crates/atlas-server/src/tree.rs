@@ -1,16 +1,11 @@
 use super::*;
-use crate::auth::{authorized, deny};
 use crate::common::{err, resolve_project};
 use serde::Serialize;
 
 pub(crate) async fn list_pages(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Query(q): Query<std::collections::HashMap<String, String>>,
 ) -> Response {
-    if !authorized(&state, &headers) {
-        return deny();
-    }
     let pref = match resolve_project(&state, q.get("project").map(|s| s.as_str())) {
         Ok(p) => p,
         Err(e) => return err(e),
@@ -48,12 +43,8 @@ pub(crate) struct TreeNode {
 
 pub(crate) async fn doc_tree(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Query(q): Query<std::collections::HashMap<String, String>>,
 ) -> Response {
-    if !authorized(&state, &headers) {
-        return deny();
-    }
     let pref = match resolve_project(&state, q.get("project").map(|s| s.as_str())) {
         Ok(p) => p,
         Err(e) => return err(e),
@@ -125,13 +116,9 @@ pub(crate) async fn doc_tree(
 
 pub(crate) async fn read_page(
     State(state): State<AppState>,
-    headers: HeaderMap,
     AxPath(path): AxPath<String>,
     Query(q): Query<std::collections::HashMap<String, String>>,
 ) -> Response {
-    if !authorized(&state, &headers) {
-        return deny();
-    }
     let pref = match resolve_project(&state, q.get("project").map(|s| s.as_str())) {
         Ok(p) => p,
         Err(e) => return err(e),

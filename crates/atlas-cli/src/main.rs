@@ -79,8 +79,6 @@ enum Cmd {
         #[arg(long, default_value_t = 4321)]
         port: u16,
         #[arg(long)]
-        insecure: bool,
-        #[arg(long)]
         web_dist: Option<PathBuf>,
     },
     /// Export wiki markdown directory
@@ -202,7 +200,7 @@ async fn main() -> Result<()> {
                 println!("  {}\t{}\t{}", p.rel_path, p.page_type, p.description);
             }
         }
-        Cmd::Web { port, insecure, web_dist } => {
+        Cmd::Web { port, web_dist } => {
             let cfg = AtlasConfig::load(&launch_root)?;
             let dist = resolve_web_dist(web_dist.as_deref(), &launch_root);
             if dist.is_none() && !atlas_server::has_embedded_ui() {
@@ -211,7 +209,7 @@ async fn main() -> Result<()> {
                      Build with `cd web && npm run build` then rebuild, or pass --web-dist."
                 );
             }
-            atlas_server::serve(launch_root, cfg, port, insecure, dist).await?;
+            atlas_server::serve(launch_root, cfg, port, dist).await?;
         }
         Cmd::Export { out } => {
             let target = resolve_target(&launch_root, cli.project.as_deref())?;

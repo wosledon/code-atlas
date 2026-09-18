@@ -1,5 +1,4 @@
 use super::*;
-use crate::auth::{authorized, deny};
 use crate::common::{err, open_project_store, resolve_project};
 use serde::Serialize;
 
@@ -15,12 +14,8 @@ pub(crate) fn search_mode_for(pref: &atlas_core::projects::ProjectRef) -> atlas_
 
 pub(crate) async fn kb_search(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Query(q): Query<std::collections::HashMap<String, String>>,
 ) -> Response {
-    if !authorized(&state, &headers) {
-        return deny();
-    }
     let project = q.get("project").map(|s| s.as_str());
     let qtext = q.get("q").cloned().unwrap_or_default();
     let limit: i64 = q

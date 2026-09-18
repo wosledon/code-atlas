@@ -231,8 +231,6 @@ function useHealth() {
     provider?: string;
   } | null>(null);
   useEffect(() => {
-    const url = new URLSearchParams(window.location.search).get("t");
-    if (url) localStorage.setItem("atlas_token", url);
     api<{ project?: string; model?: string; provider?: string }>(
       withProject("/api/health", projectId)
     )

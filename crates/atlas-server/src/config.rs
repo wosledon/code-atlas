@@ -1,5 +1,4 @@
 use super::*;
-use crate::auth::{authorized, deny};
 use crate::common::{err, resolve_project};
 use axum::extract::Query as AxQuery;
 use serde::Deserialize;
@@ -27,12 +26,8 @@ pub(crate) struct ConfigUpdate {
 
 pub(crate) async fn get_config(
     State(state): State<AppState>,
-    headers: HeaderMap,
     AxQuery(q): AxQuery<std::collections::HashMap<String, String>>,
 ) -> Response {
-    if !authorized(&state, &headers) {
-        return deny();
-    }
     let pref = match resolve_project(&state, q.get("project").map(|s| s.as_str())) {
         Ok(p) => p,
         Err(e) => return err(e),
@@ -67,12 +62,8 @@ pub(crate) async fn get_config(
 /// Rewrite `atlas.toml` (non-secret fields only) for the target project.
 pub(crate) async fn post_config(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Json(body): Json<ConfigUpdate>,
 ) -> Response {
-    if !authorized(&state, &headers) {
-        return deny();
-    }
     let pref = match resolve_project(&state, body.project.as_deref()) {
         Ok(p) => p,
         Err(e) => return err(e),

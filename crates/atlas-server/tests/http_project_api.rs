@@ -18,15 +18,14 @@ fn temp_dir(tag: &str) -> PathBuf {
 fn test_app(launch: &std::path::Path) -> axum::Router {
     let reg = ProjectRegistry::load_with_registry_path(launch, launch.join("test.registry.json"));
     let cfg = AtlasConfig::default();
-    let state = build_state_with_registry(launch.to_path_buf(), cfg, "test-token".into(), reg);
+    let state = build_state_with_registry(launch.to_path_buf(), cfg, reg);
     build_api_router(state)
 }
 
-fn auth_req(method: &str, uri: &str) -> Request<Body> {
+fn req(method: &str, uri: &str) -> Request<Body> {
     Request::builder()
         .method(method)
         .uri(uri)
-        .header("authorization", "Bearer test-token")
         .body(Body::empty())
         .unwrap()
 }
@@ -37,21 +36,13 @@ async fn body_json(res: axum::response::Response) -> serde_json::Value {
 }
 
 #[tokio::test]
-async fn projects_list_requires_auth_and_includes_launch() {
+async fn projects_list_includes_launch() {
     let launch = temp_dir("auth");
     let app = test_app(&launch);
 
-    let unauth = Request::builder()
-        .method("GET")
-        .uri("/api/projects")
-        .body(Body::empty())
-        .unwrap();
-    let res = app.clone().oneshot(unauth).await.unwrap();
-    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
-
     let res = app
         .clone()
-        .oneshot(auth_req("GET", "/api/projects"))
+        .oneshot(req("GET", "/api/projects"))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
@@ -78,7 +69,7 @@ async fn runs_and_tree_accept_project_query() {
 
     let res = app
         .clone()
-        .oneshot(auth_req("GET", "/api/runs?project=default"))
+        .oneshot(req("GET", "/api/runs?project=default"))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
@@ -87,7 +78,7 @@ async fn runs_and_tree_accept_project_query() {
 
     let res = app
         .clone()
-        .oneshot(auth_req("GET", "/api/tree?project=default"))
+        .oneshot(req("GET", "/api/tree?project=default"))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
@@ -105,7 +96,7 @@ async fn unknown_project_id_is_error() {
 
     let res = app
         .clone()
-        .oneshot(auth_req("GET", "/api/runs?project=no-such-project"))
+        .oneshot(req("GET", "/api/runs?project=no-such-project"))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -123,7 +114,7 @@ async fn health_and_config_accept_project_query() {
 
     let res = app
         .clone()
-        .oneshot(auth_req("GET", "/api/health?project=default"))
+        .oneshot(req("GET", "/api/health?project=default"))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
@@ -133,7 +124,7 @@ async fn health_and_config_accept_project_query() {
 
     let res = app
         .clone()
-        .oneshot(auth_req("GET", "/api/config?project=default"))
+        .oneshot(req("GET", "/api/config?project=default"))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
@@ -152,7 +143,6 @@ async fn update_unknown_project_errors() {
     let req = Request::builder()
         .method("POST")
         .uri("/api/projects/nope/update")
-        .header("authorization", "Bearer test-token")
         .header("content-type", "application/json")
         .body(Body::from(r#"{"mode":"update"}"#))
         .unwrap();

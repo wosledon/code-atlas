@@ -1,5 +1,4 @@
 use super::*;
-use crate::auth::{authorized, deny};
 use crate::common::{open_project_store, resolve_project};
 use crate::search::search_mode_for;
 use axum::body::Body;
@@ -31,12 +30,8 @@ pub(crate) struct ChatRequest {
 /// - `{"type":"done","project","mode","answer","sources","contexts","usage"?}` — final
 pub(crate) async fn kb_chat(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Json(body): Json<ChatRequest>,
 ) -> Response {
-    if !authorized(&state, &headers) {
-        return deny();
-    }
     let user_msg = body
         .messages
         .iter()

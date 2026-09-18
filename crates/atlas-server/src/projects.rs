@@ -1,5 +1,4 @@
 use super::*;
-use crate::auth::{authorized, deny};
 use crate::common::{err, open_project_store, reload_registry, resolve_project};
 use atlas_core::projects::ProjectRef;
 use serde::{Deserialize, Serialize};
@@ -78,10 +77,7 @@ fn default_mode() -> String {
 
 /// Landing page data: one card per project in the registry (launch repo first).
 /// Registry is hot-reloaded from disk on every list.
-pub(crate) async fn list_projects(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if !authorized(&state, &headers) {
-        return deny();
-    }
+pub(crate) async fn list_projects(State(state): State<AppState>) -> Response {
     let list = reload_registry(&state).list();
     let mut projects = Vec::with_capacity(list.len());
     for pref in &list {
@@ -95,12 +91,8 @@ pub(crate) async fn list_projects(State(state): State<AppState>, headers: Header
 
 pub(crate) async fn register_project(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Json(body): Json<RegisterProjectBody>,
 ) -> Response {
-    if !authorized(&state, &headers) {
-        return deny();
-    }
     let root = std::path::PathBuf::from(&body.root);
     let mut guard = state
         .projects
@@ -117,12 +109,8 @@ pub(crate) async fn register_project(
 
 pub(crate) async fn unregister_project(
     State(state): State<AppState>,
-    headers: HeaderMap,
     AxPath(id): AxPath<String>,
 ) -> Response {
-    if !authorized(&state, &headers) {
-        return deny();
-    }
     let mut guard = state
         .projects
         .write()
@@ -136,13 +124,9 @@ pub(crate) async fn unregister_project(
 /// Project-scoped doc update. `id` is the project id from `/api/projects`.
 pub(crate) async fn trigger_project_update(
     State(state): State<AppState>,
-    headers: HeaderMap,
     AxPath(id): AxPath<String>,
     body: Option<Json<UpdateProjectBody>>,
 ) -> Response {
-    if !authorized(&state, &headers) {
-        return deny();
-    }
     let mode = body.as_ref().map(|Json(b)| b.mode.clone()).unwrap_or_else(default_mode);
     let instruction = body.and_then(|Json(b)| b.instruction);
     if mode != "update" && mode != "init" {
