@@ -2,19 +2,22 @@
 //!
 //! - [`LlmClient`]：对外入口，负责构造请求、重试与工具回合编排。
 //! - `tools`：`chat_with_tools` 的多轮工具循环。
+//! - `dialect`：模型把工具调用写成正文时的解析与摘除。
 //! - `sse`：流式增量与 [`StreamSink`]（回合边界可回滚）。
 //! - `providers`：OpenAI 兼容接口与 Anthropic Messages 接口的单轮请求。
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use std::time::{Duration, Instant};
 
 use crate::types::{LlmConfig, LlmResponse};
 use crate::wire::ChatMessage;
 
+mod dialect;
 mod providers;
 mod sse;
 mod tools;
 
+pub use dialect::strip as strip_text_tool_calls;
 pub use sse::{StreamSink, sink_fn, sink_pair, with_stream_sink};
 
 pub struct LlmClient {
@@ -47,11 +50,7 @@ impl LlmClient {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(cfg.timeout_secs))
             .build()?;
-        Ok(Self {
-            cfg,
-            api_key,
-            http,
-        })
+        Ok(Self { cfg, api_key, http })
     }
 
     pub fn model(&self) -> &str {
@@ -116,18 +115,24 @@ impl LlmClient {
             ));
         }
         let started = Instant::now();
-        if self.cfg.provider == "anthropic" {
-            return self.chat_anthropic_with_retry(system, user, started).await;
-        }
-        // `post_chat` already owns the retry budget for OpenAI-compatible
-        // endpoints, so both plain chats and tool rounds retry identically.
-        let messages = vec![ChatMessage::system(system), ChatMessage::user(user)];
-        let turn = self.post_chat(&messages, &[], started.elapsed()).await?;
-        Ok(LlmResponse {
-            text: turn.text,
-            usage: turn.usage,
-            model: turn.model,
-        })
+        let mut resp = if self.cfg.provider == "anthropic" {
+            self.chat_anthropic_with_retry(system, user, started)
+                .await?
+        } else {
+            // `post_chat` already owns the retry budget for OpenAI-compatible
+            // endpoints, so both plain chats and tool rounds retry identically.
+            let messages = vec![ChatMessage::system(system), ChatMessage::user(user)];
+            let turn = self.post_chat(&messages, &[], started.elapsed()).await?;
+            LlmResponse {
+                text: turn.text,
+                usage: turn.usage,
+                model: turn.model,
+            }
+        };
+        // This call has no tools to run, so a tool request the model wrote as
+        // text is not an answer: drop it instead of handing it to the caller.
+        resp.text = strip_text_tool_calls(&resp.text);
+        Ok(resp)
     }
 
     async fn chat_anthropic_with_retry(

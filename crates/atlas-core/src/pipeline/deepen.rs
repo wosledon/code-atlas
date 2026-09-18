@@ -7,6 +7,7 @@ use super::brief::depth_gaps;
 use super::model_call::call_model;
 use super::progress::PageBar;
 use super::prompt::expand_messages;
+use super::quality::{is_polluted, sanitize_generated_body};
 use super::*;
 
 /// 「扩写」：深度门发现页面太浅时，让模型带着缺口清单重写全文。
@@ -50,17 +51,29 @@ pub(super) async fn deepen_page(
         gaps.len()
     ));
     match atlas_llm::with_stream_sink(
-        pb.clone().stream_sink(format!("扩写 {n}/{total_pages} {}", page.rel_path)),
+        pb.clone()
+            .stream_sink(format!("扩写 {n}/{total_pages} {}", page.rel_path)),
         expand_page_with_llm(llm, evidence, page, cfg, tools, &body, &gaps),
     )
     .await
     {
         Ok((extra, revised)) => {
             let total = (usage.0 + extra.0, usage.1 + extra.1, usage.2 + extra.2);
+            // The rewrite is a model body like any other: a transcript it emits
+            // must not replace a first draft that passed the gate.
+            let revised = sanitize_generated_body(&revised);
+            if is_polluted(&revised) {
+                tracing::warn!(
+                    "[{n}/{total_pages}] {} 扩写含工具调用残片，保留首稿",
+                    page.rel_path
+                );
+                return (body, total, false);
+            }
             let after = depth_gaps(&revised, page);
             let improved = revised.trim().chars().count() >= 80
                 && (after.len() < gaps.len()
-                    || (after.len() == gaps.len() && revised.chars().count() > body.chars().count()));
+                    || (after.len() == gaps.len()
+                        && revised.chars().count() > body.chars().count()));
             if improved {
                 (revised, total, true)
             } else {

@@ -1,10 +1,10 @@
 use anyhow::Result;
 use std::time::Instant;
 
-use crate::types::{LlmResponse, LlmUsage, ToolSpec};
+use crate::types::{LlmResponse, LlmTurn, LlmUsage, ToolCall, ToolSpec};
 use crate::wire::{ChatMessage, ToolCallFunction, ToolCallPayload};
 
-use super::{LlmClient, sse, truncate};
+use super::{LlmClient, dialect, sse, truncate};
 
 impl LlmClient {
     /// Ask the model to write something while letting it call read-only tools
@@ -40,33 +40,46 @@ impl LlmClient {
             // Text a round emits before asking for a tool is usually narration
             // ("let me read X"); it is discarded below so it never reaches the page.
             sse::emit_round_start();
-            let turn = self.post_chat(&messages, offer, started.elapsed()).await?;
-            sse::emit_round_end(turn.tool_calls.is_empty());
-            prompt_tokens += turn.usage.prompt_tokens;
-            completion_tokens += turn.usage.completion_tokens;
-            if !turn.text.trim().is_empty() {
-                last_text = turn.text.clone();
-            }
-            if turn.tool_calls.is_empty() {
+            let LlmTurn {
+                text: raw,
+                tool_calls,
+                usage,
+                model,
+            } = self.post_chat(&messages, offer, started.elapsed()).await?;
+            prompt_tokens += usage.prompt_tokens;
+            completion_tokens += usage.completion_tokens;
+            // Some models ask for tools as text (`<tool_call><function=read_file>
+            // <parameter=path>…`) rather than through `tool_calls[]`; run what
+            // they asked for so the transcript never reaches the caller.
+            let (calls, text) = dialect::resolve(&raw, tool_calls, offer);
+            if calls.is_empty() {
+                // Keep the streamed text only when nothing was dropped: a
+                // transcript we could not run must not stay in a draft either.
+                sse::emit_round_end(text == raw);
                 return Ok(LlmResponse {
-                    text: turn.text,
+                    text,
                     usage: LlmUsage {
                         prompt_tokens,
                         completion_tokens,
                         latency_ms: started.elapsed().as_millis() as i64,
                     },
-                    model: turn.model,
+                    model,
                 });
             }
+            sse::emit_round_end(false);
+            if !text.trim().is_empty() {
+                last_text = text.clone();
+            }
+            // Three calls per round: every result stays in the history and is
+            // re-sent on each later round, so breadth here is paid for 2×. Echo
+            // back exactly the calls that get answered below, or the next
+            // request carries `tool_calls` no message replies to.
+            let calls: Vec<ToolCall> = calls.into_iter().take(3).collect();
             messages.push(ChatMessage {
                 role: "assistant".into(),
-                content: if turn.text.trim().is_empty() {
-                    None
-                } else {
-                    Some(turn.text.clone())
-                },
+                content: (!text.trim().is_empty()).then_some(text),
                 tool_calls: Some(
-                    turn.tool_calls
+                    calls
                         .iter()
                         .map(|c| ToolCallPayload {
                             id: c.id.clone(),
@@ -80,9 +93,7 @@ impl LlmClient {
                 ),
                 tool_call_id: None,
             });
-            // Three calls per round: every result stays in the history and is
-            // re-sent on each later round, so breadth here is paid for 2×.
-            for call in turn.tool_calls.iter().take(3) {
+            for call in &calls {
                 let result = match exec(&call.name, &call.arguments) {
                     Ok(out) => out,
                     Err(e) => format!("ERROR: {e:#}"),
@@ -93,7 +104,7 @@ impl LlmClient {
         }
         // Unreachable in practice: the final iteration is tool-free.
         Ok(LlmResponse {
-            text: last_text,
+            text: dialect::strip(&last_text),
             usage: LlmUsage {
                 prompt_tokens,
                 completion_tokens,

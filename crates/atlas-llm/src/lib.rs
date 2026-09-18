@@ -9,5 +9,7 @@ mod client;
 mod types;
 mod wire;
 
-pub use client::{StreamSink, sink_fn, sink_pair, with_stream_sink, LlmClient};
+pub use client::{
+    LlmClient, StreamSink, sink_fn, sink_pair, strip_text_tool_calls, with_stream_sink,
+};
 pub use types::{LlmConfig, LlmResponse, LlmTurn, LlmUsage, ToolCall, ToolSpec};
