@@ -1,9 +1,11 @@
 //! File listing / reading / grep / tree — the core evidence tools.
 
 use super::RepoTools;
+use super::compress;
 use super::glob::{clip, is_skipped_dir, is_text_extension, shell_glob_match};
 use anyhow::{Result, anyhow};
 use std::path::Path;
+use std::sync::Arc;
 use walkdir::WalkDir;
 
 /// Lines returned by an un-ranged `read_file`; the caller can continue from
@@ -50,19 +52,30 @@ impl RepoTools {
         end: Option<u64>,
     ) -> Result<String> {
         let full = self.resolve(path)?;
-        let meta = std::fs::metadata(&full)?;
-        if meta.len() as usize > self.max_file_bytes {
-            return Err(anyhow!(
-                "file is {} bytes which exceeds the {}-byte limit",
-                meta.len(),
-                self.max_file_bytes
-            ));
-        }
-        let bytes = std::fs::read(&full)?;
-        if bytes.iter().take(1024).any(|b| *b == 0) {
-            return Err(anyhow!("refusing to read binary file `{path}`"));
-        }
-        let text = String::from_utf8_lossy(&bytes);
+        let rel = self.rel(&full);
+        // One disk read per file per run: any window of a file already read is
+        // served from the snapshot, so a shifted or overlapping range costs
+        // nothing. The repo is frozen for the run, so this cannot go stale.
+        let text: Arc<str> = match self.cache_file(&rel) {
+            Some(text) => text,
+            None => {
+                let meta = std::fs::metadata(&full)?;
+                if meta.len() as usize > self.max_file_bytes {
+                    return Err(anyhow!(
+                        "file is {} bytes which exceeds the {}-byte limit",
+                        meta.len(),
+                        self.max_file_bytes
+                    ));
+                }
+                let bytes = std::fs::read(&full)?;
+                if bytes.iter().take(1024).any(|b| *b == 0) {
+                    return Err(anyhow!("refusing to read binary file `{path}`"));
+                }
+                let text: Arc<str> = Arc::from(String::from_utf8_lossy(&bytes).into_owned());
+                self.cache_file_put(rel.clone(), text.clone());
+                text
+            }
+        };
         let lines: Vec<&str> = text.lines().collect();
         let total = lines.len();
         let from = start.unwrap_or(1).max(1) as usize;
@@ -78,6 +91,7 @@ impl RepoTools {
             Some(e) => (e.max(1) as usize).max(from).min(total),
             None => (from + READ_WINDOW_LINES - 1).min(total),
         };
+        // ~4 字节/token 够用的压缩统计：压缩后的文本才是进对话、进 token 账单的那份。
         let mut out = format!("// {path} lines {from}-{to} of {total}\n");
         if to < total {
             out.push_str(&format!(
@@ -85,8 +99,23 @@ impl RepoTools {
                 to + 1
             ));
         }
-        for (i, line) in lines[from - 1..to].iter().enumerate() {
-            out.push_str(&format!("{:>5}| {}\n", from + i, clip(line)));
+        let window: String = lines[from - 1..to]
+            .iter()
+            .map(|l| format!("{}\n", clip(l)))
+            .collect();
+        // 公共缩进外提（可逆）：深层嵌套的窗口每行都少 8–12 个空格。
+        let (_, hoisted) = compress::hoist_common_indent(&window);
+        let body = hoisted.text;
+        // 重复行折叠（可逆）：保留首行行号 + 计数，`path:line` 引用不受影响。
+        let numbered: Vec<(usize, String)> = body
+            .lines()
+            .enumerate()
+            .map(|(i, l)| (from + i, l.to_string()))
+            .collect();
+        let (folded, folded_chars) = compress::fold_identical_runs(numbered);
+        self.note_saved(hoisted.removed + folded_chars);
+        for (no, content) in folded {
+            out.push_str(&format!("{no:>5}| {content}\n"));
         }
         Ok(out)
     }

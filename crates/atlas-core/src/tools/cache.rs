@@ -9,8 +9,8 @@
 //! would not then rewrite anyway.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 /// Ceiling for everything kept. Hits are the common case (the same files for
 /// every page), so the cache is worth having, but a monorepo must not pin its
@@ -23,12 +23,23 @@ const MAX_BYTES: usize = 32 * 1024 * 1024;
 /// small files every page reads.
 const MAX_ENTRY_BYTES: usize = 512 * 1024;
 
+/// A single file snapshot bigger than this is read normally but not held.
+const MAX_FILE_SNAPSHOT: usize = 1024 * 1024;
+
+/// Total file snapshots held per run.
+const MAX_FILES_BYTES: usize = 16 * 1024 * 1024;
+
 /// What the cache did over a run, for the run summary.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CacheStats {
     pub hits: usize,
     pub misses: usize,
     pub bytes: usize,
+    /// Files whose text is held for the rest of the run.
+    pub snapshots: usize,
+    /// `read_file` calls answered from a snapshot of a file read earlier —
+    /// including window shifts and overlaps the per-call cache cannot serve.
+    pub snapshot_hits: usize,
 }
 
 impl CacheStats {
@@ -65,6 +76,12 @@ pub(crate) struct ToolCache {
     bytes: AtomicUsize,
     hits: AtomicUsize,
     misses: AtomicUsize,
+    /// Whole-file text, keyed by repo-relative path. A page that reads lines
+    /// 1–120 and later 100–200 of the same file must not touch the disk twice:
+    /// the per-call cache cannot serve the shifted window, a file snapshot can.
+    files: Mutex<HashMap<String, Arc<str>>>,
+    file_bytes: AtomicUsize,
+    snapshot_hits: AtomicUsize,
 }
 
 impl ToolCache {
@@ -107,11 +124,43 @@ impl ToolCache {
         }
     }
 
+    /// The file text if this run has already read it, counting a snapshot hit.
+    pub(crate) fn file(&self, rel: &str) -> Option<Arc<str>> {
+        let hit = self
+            .files
+            .lock()
+            .ok()
+            .and_then(|files| files.get(rel).cloned());
+        if hit.is_some() {
+            self.snapshot_hits.fetch_add(1, Ordering::Relaxed);
+        }
+        hit
+    }
+
+    /// Remember a file's text for the rest of the run. Oversized files are read
+    /// normally but not held, so a monorepo cannot pin its whole tree in memory.
+    pub(crate) fn put_file(&self, rel: String, text: Arc<str>) {
+        if text.len() > MAX_FILE_SNAPSHOT {
+            return;
+        }
+        let Ok(mut files) = self.files.lock() else {
+            return;
+        };
+        if self.file_bytes.load(Ordering::Relaxed) + text.len() > MAX_FILES_BYTES {
+            return;
+        }
+        if files.insert(rel, text.clone()).is_none() {
+            self.file_bytes.fetch_add(text.len(), Ordering::Relaxed);
+        }
+    }
+
     pub(crate) fn stats(&self) -> CacheStats {
         CacheStats {
             hits: self.hits.load(Ordering::Relaxed),
             misses: self.misses.load(Ordering::Relaxed),
             bytes: self.bytes.load(Ordering::Relaxed),
+            snapshots: self.files.lock().map(|f| f.len()).unwrap_or_default(),
+            snapshot_hits: self.snapshot_hits.load(Ordering::Relaxed),
         }
     }
 }
@@ -141,17 +190,28 @@ mod tests {
     #[test]
     fn held_uses_a_readable_unit() {
         let kb = CacheStats {
-            hits: 0,
-            misses: 0,
             bytes: 2 * 1024 + 512,
+            ..Default::default()
         };
         assert_eq!(kb.held(), "2.5 KiB");
         let mb = CacheStats {
-            hits: 0,
-            misses: 0,
             bytes: 3 * 1024 * 1024,
+            ..Default::default()
         };
         assert_eq!(mb.held(), "3.0 MiB");
+    }
+
+    /// 文件快照：同一文件只读一次盘，之后任意行范围都命中。
+    #[test]
+    fn file_snapshots_serve_any_later_range() {
+        let cache = ToolCache::default();
+        assert!(cache.file("src/lib.rs").is_none());
+        cache.put_file("src/lib.rs".into(), Arc::from("line1\nline2\nline3\n"));
+        assert!(cache.file("src/lib.rs").is_some());
+        assert!(cache.file("src/lib.rs").is_some());
+        let stats = cache.stats();
+        assert_eq!(stats.snapshots, 1);
+        assert_eq!(stats.snapshot_hits, 2);
     }
 
     #[test]

@@ -5,6 +5,7 @@
 //! to the repo root and are filtered by privacy rules.
 
 mod cache;
+mod compress;
 mod glob;
 mod hunt;
 mod scan;
@@ -13,6 +14,7 @@ use anyhow::{Result, anyhow};
 use atlas_llm::ToolSpec;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub use cache::CacheStats;
 pub use glob::shell_glob_match;
@@ -25,6 +27,8 @@ pub struct RepoTools {
     pub(crate) redact: Vec<String>,
     pub(crate) max_file_bytes: usize,
     cache: cache::ToolCache,
+    /// Characters the compression pipeline kept out of the conversation.
+    compressed_saved: AtomicUsize,
 }
 
 impl RepoTools {
@@ -37,12 +41,33 @@ impl RepoTools {
             redact,
             max_file_bytes: max_file_bytes.max(1024),
             cache: cache::ToolCache::default(),
+            compressed_saved: AtomicUsize::new(0),
         })
     }
 
     /// What the snapshot cache did so far (hits, misses, bytes held).
     pub fn cache_stats(&self) -> CacheStats {
         self.cache.stats()
+    }
+
+    /// Characters the compression pipeline removed from tool output this run.
+    pub fn compression_saved(&self) -> usize {
+        self.compressed_saved.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn note_saved(&self, chars: usize) {
+        if chars > 0 {
+            self.compressed_saved.fetch_add(chars, Ordering::Relaxed);
+        }
+    }
+
+    /// File text held for this run, if `read_file` already loaded it.
+    pub(crate) fn cache_file(&self, rel: &str) -> Option<std::sync::Arc<str>> {
+        self.cache.file(rel)
+    }
+
+    pub(crate) fn cache_file_put(&self, rel: String, text: std::sync::Arc<str>) {
+        self.cache.put_file(rel, text);
     }
 
     pub fn specs() -> Vec<ToolSpec> {
@@ -159,6 +184,17 @@ impl RepoTools {
             return Ok(hit);
         }
         let out = self.run(name, &args)?;
+        // The compressed form is what goes into the conversation (and into the
+        // cache): read_file already applied the line-level passes itself, so it
+        // is only normalized here.
+        let out = match name {
+            "read_file" => out,
+            _ => {
+                let compacted = compress::compact(&out);
+                self.note_saved(compacted.removed);
+                compacted.text
+            }
+        };
         self.cache.put(key, &out);
         Ok(out)
     }
@@ -339,6 +375,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("atlas-tools-cache-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(dir.join("src/lib.rs"), "fn main() {}\n").unwrap();
+        std::fs::write(dir.join("src/other.rs"), "line1\nline2\nline3\n").unwrap();
         let t = tools(&dir);
 
         let first = t
@@ -358,26 +395,36 @@ mod tests {
             .unwrap();
         assert_eq!(reordered, first);
 
-        // 不同行范围是不同的调用，不能互相命中。
-        std::fs::write(dir.join("src/lib.rs"), "line1\nline2\nline3\n").unwrap();
+        // 换一个行范围：结果不同，但要靠**文件快照**命中，不重新读盘
+        // （盘上那份已经被删掉了，能答出来就说明用的是快照）。
         let window = t
             .call(
                 "read_file",
-                "{\"path\":\"src/lib.rs\",\"start_line\":2,\"end_line\":2}",
+                "{\"path\":\"src/other.rs\",\"start_line\":2,\"end_line\":2}",
             )
             .unwrap();
         assert!(window.contains("line2"), "got {window}");
-        assert_ne!(window, first);
+        let whole = t
+            .call("read_file", "{\"path\":\"src/other.rs\",\"start_line\":1}")
+            .unwrap();
+        assert!(whole.contains("line3"), "got {whole}");
+        assert_ne!(window, whole);
+        assert_eq!(
+            t.cache_stats().snapshot_hits,
+            1,
+            "第二个行范围应命中文件快照"
+        );
 
         let stats = t.cache_stats();
         assert_eq!(stats.hits, 2, "{stats:?}");
-        assert_eq!(stats.misses, 2, "{stats:?}");
+        assert_eq!(stats.misses, 3, "{stats:?}");
+        assert_eq!(stats.snapshots, 2, "两个文件各留一份快照");
 
         // 失败（路径不存在、参数非法）不进缓存：模型需要看到真实的错误。
         assert!(t.call("read_file", "{\"path\":\"missing.rs\"}").is_err());
         assert!(t.call("read_file", "{\"path\":\"missing.rs\"}").is_err());
         assert!(t.call("read_file", "not json").is_err());
-        assert_eq!(t.cache_stats().misses, 4, "{:?}", t.cache_stats());
+        assert_eq!(t.cache_stats().misses, 5, "{:?}", t.cache_stats());
         assert_eq!(t.cache_stats().hits, 2, "{:?}", t.cache_stats());
 
         std::fs::remove_dir_all(&dir).ok();

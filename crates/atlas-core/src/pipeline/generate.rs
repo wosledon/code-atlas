@@ -128,9 +128,10 @@ pub(super) async fn generate_pages(
         reuse_planned,
         counts,
         use_llm,
-        Caches {
+        Savings {
             tools: tools.cache_stats(),
             prompt: llm.prompt_cache_totals(),
+            compressed: tools.compression_saved(),
         },
     );
     Ok(())
@@ -162,14 +163,17 @@ fn merge_page(counts: &mut RunCounts, report: PageReport) {
     }
 }
 
-/// What the run's two caches did. Reported together because both answer the
-/// same question — how much of this run was paid for twice.
+/// What this run saved: the two caches plus the compression pipeline. Reported
+/// together because they all answer the same question — how much of this run was
+/// paid for twice, or paid for at all.
 #[derive(Clone, Copy, Default)]
-struct Caches {
-    /// Tool results served from the run-scoped snapshot cache.
+struct Savings {
+    /// Tool results served from the run-scoped caches.
     tools: CacheStats,
     /// `(prompt tokens, of which served from the provider's prompt cache)`.
     prompt: (i64, i64),
+    /// Characters the compression pipeline kept out of the conversation.
+    compressed: usize,
 }
 
 /// Close the bars and report what the run did, including the two situations the
@@ -182,7 +186,7 @@ fn report_run(
     reuse_planned: usize,
     counts: &mut RunCounts,
     use_llm: bool,
-    caches: Caches,
+    savings: Savings,
 ) {
     let (ok, failed, expanded, kept) = (
         generator.ok(),
@@ -204,24 +208,39 @@ fn report_run(
         ),
     );
 
-    let cache = caches.tools;
+    let cache = savings.tools;
     if cache.lookups() > 0 {
         counts.notes.push(format!(
-            "tool cache: {}/{} lookups hit ({:.0}%), {} held",
+            "tool cache: {}/{} lookups hit ({:.0}%), {} held, {} file snapshots ({} reused for another range)",
             cache.hits,
             cache.lookups(),
             cache.hit_rate() * 100.0,
-            cache.held()
+            cache.held(),
+            cache.snapshots,
+            cache.snapshot_hits
         ));
         progress.line(&format!(
-            "工具读取缓存：命中 {}/{}（{:.0}%）· 缓存 {}（同一文件被多页读到时不重复读盘）",
+            "工具读取缓存：命中 {}/{}（{:.0}%）· 缓存 {} · 文件快照 {} 个（其中 {} 次服务了另一个行范围）",
             cache.hits,
             cache.lookups(),
             cache.hit_rate() * 100.0,
-            cache.held()
+            cache.held(),
+            cache.snapshots,
+            cache.snapshot_hits
         ));
     }
-    let (prompt_tokens, cached_tokens) = caches.prompt;
+    if savings.compressed > 0 {
+        counts.notes.push(format!(
+            "tool output compression: {} characters kept out of the conversation",
+            savings.compressed
+        ));
+        progress.line(&format!(
+            "工具输出压缩：省下 {} 字符（≈{} tokens）· 空白归一 / 空行折叠 / 公共缩进外提 / 重复行折叠",
+            savings.compressed,
+            savings.compressed / 4
+        ));
+    }
+    let (prompt_tokens, cached_tokens) = savings.prompt;
     if cached_tokens > 0 && prompt_tokens > 0 {
         let pct = cached_tokens as f64 / prompt_tokens as f64 * 100.0;
         counts.notes.push(format!(
