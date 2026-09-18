@@ -6,13 +6,16 @@ import {
   repairMermaid,
 } from "../../lib/mermaid";
 
-export function useDiagramRender(code: string) {
+export function useDiagramRender(code: string, paused = false) {
   const [svg, setSvg] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [repaired, setRepaired] = useState(false);
   const id = useMemo(() => `mmd-${Math.random().toString(36).slice(2, 9)}`, []);
 
   useEffect(() => {
+    // Half-written source (streaming, no closing fence): rendering it would fail
+    // on every delta and flash the parse-error panel at the reader.
+    if (paused) return;
     let cancelled = false;
     const show = (markup: string, wasRepaired: boolean) => {
       if (cancelled) return;
@@ -47,7 +50,7 @@ export function useDiagramRender(code: string) {
     return () => {
       cancelled = true;
     };
-  }, [code, id]);
+  }, [code, id, paused]);
 
   return { svg, err, repaired };
 }

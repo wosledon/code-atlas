@@ -1,10 +1,18 @@
 use super::*;
 use crate::common::{open_project_store, resolve_project};
 use crate::search::search_mode_for;
+use atlas_core::tools::RepoTools;
 use axum::body::Body;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::ReceiverStream;
+
+mod sink;
+mod tools;
+
+use sink::AnswerSink;
+use tools::{answer, chat_tools};
 
 #[derive(serde::Deserialize)]
 pub(crate) struct ChatMessageIn {
@@ -27,6 +35,7 @@ pub(crate) struct ChatRequest {
 /// SSE frames (each `data: <json>\n\n`):
 /// - `{"type":"meta","project","mode","sources","contexts"}`
 /// - `{"type":"delta","text"}` — answer tokens while the LLM streams
+/// - `{"type":"reset","text"}` — take back the provisional text, keep `text`
 /// - `{"type":"done","project","mode","answer","sources","contexts","usage"?}` — final
 pub(crate) async fn kb_chat(
     State(state): State<AppState>,
@@ -108,6 +117,19 @@ pub(crate) async fn kb_chat(
         _ => None,
     };
 
+    // Repository access for the answer. A failed setup (unreadable root) is not
+    // fatal: the answer then rests on chunk recall alone, as it did before.
+    let tools = RepoTools::new(
+        &pref.root,
+        pref.cfg.privacy.redact_paths.clone(),
+        pref.cfg.privacy.max_file_bytes,
+    )
+    .map(Arc::new)
+    .map_err(|e| tracing::warn!("仓库工具不可用，本次对话仅依赖召回：{e:#}"))
+    .ok();
+    let specs = chat_tools();
+    let rounds = pref.cfg.llm.max_tool_rounds;
+
     // Build the grounded prompt only when an LLM is available.
     let language = pref.cfg.output.language.clone();
     let project_id = pref.id.clone();
@@ -146,8 +168,18 @@ pub(crate) async fn kb_chat(
         let system = format!(
             "You are Code Atlas assistant. Answer in {}. \
              Use ONLY the provided repository/wiki context for factual claims. \
-             Cite page paths like `atlas/architecture/overview.md` when used. \
-             If context is insufficient, say so briefly.\n\n## Context\n{}",
+             Cite page paths like `atlas/architecture/overview.md` when used.\n\
+             The recalled context above is ranked by similarity, so it can be incomplete or \
+             stale: before answering that something is missing, call `grep` to locate the \
+             symbol, config key or message in the repository and `read_file` to read around a \
+             match. Say the context is insufficient only after searching.\n\
+             When a flow, a layering or a data relationship is clearer as a diagram, \
+             include ONE ```mermaid block (flowchart / sequenceDiagram). \
+             Its syntax must parse: node ids are plain ASCII ids and never a mermaid \
+             keyword (`graph`, `end`, `subgraph`, `class`, `style`, `click`, `direction`, \
+             `default`); wrap EVERY node and edge label in double quotes and use `<br/>` \
+             instead of a literal newline, e.g. `a[\"crates/atlas-core<br/>run_init\"]`, \
+             `a -->|\"是\"| b`. An unquoted label is a parse error.\n\n## Context\n{}",
             language, context
         );
         (system, user)
@@ -183,14 +215,12 @@ pub(crate) async fn kb_chat(
         };
 
         let (system, user) = prompt.expect("prompt built with llm");
-        let tx_delta = tx.clone();
-        let sink = atlas_llm::sink_fn(move |s: &str| {
-            if !s.is_empty() {
-                let _ = tx_delta.try_send(emit(json!({ "type": "delta", "text": s })));
-            }
-        });
-
-        let result = atlas_llm::with_stream_sink(sink, llm.chat(&system, &user)).await;
+        let sink = AnswerSink::new(tx.clone());
+        let result = atlas_llm::with_stream_sink(
+            sink,
+            answer(&llm, tools.as_deref(), &specs, rounds, &system, &user),
+        )
+        .await;
         let frame = match result {
             Ok(resp) if !resp.text.trim().is_empty() => json!({
                 "type": "done",

@@ -48,8 +48,15 @@ mermaid.initialize({
   },
 });
 
-export function MarkdownView({ source }: { source: string }) {
-  const nodes = useMemo(() => parseBlocks(source), [source]);
+export function MarkdownView({
+  source,
+  streaming = false,
+}: {
+  source: string;
+  /** Source is still arriving: a fence without its closing ``` is normal. */
+  streaming?: boolean;
+}) {
+  const nodes = useMemo(() => parseBlocks(source, streaming), [source, streaming]);
   return (
     <div className="md-view" style={{ lineHeight: 1.65, fontSize: 15, color: "#141A22" }}>
       <style>{mdCss}</style>
@@ -116,7 +123,7 @@ export function extractHeadings(md: string): { level: number; text: string; id: 
   return out;
 }
 
-function parseBlocks(md: string): ReactNode[] {
+function parseBlocks(md: string, streaming: boolean): ReactNode[] {
   const lines = md.replace(/\r\n/g, "\n").split("\n");
   const out: ReactNode[] = [];
   let i = 0;
@@ -141,10 +148,13 @@ function parseBlocks(md: string): ReactNode[] {
         buf.push(lines[i]);
         i++;
       }
+      // No closing fence: while the answer is still streaming the block is
+      // half-written, and a diagram parsed from it fails every time.
+      const closed = i < lines.length;
       i++;
       const code = buf.join("\n");
       if (lang === "mermaid") {
-        out.push(<MermaidBlock key={key++} code={code} />);
+        out.push(<MermaidBlock key={key++} code={code} pending={streaming && !closed} />);
       } else {
         out.push(
           <pre

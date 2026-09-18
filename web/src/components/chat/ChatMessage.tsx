@@ -49,7 +49,7 @@ export function ChatMessage({ turn: m }: { turn: ChatTurn }) {
       <Box sx={{ flex: 1, minWidth: 0 }}>
         <ChatBubble variant="bot">
           {m.content ? (
-            <MarkdownView source={m.content} />
+            <MarkdownView source={m.content} streaming={m.streaming} />
           ) : (
             <Stack direction="row" spacing={1} alignItems="center">
               <CircularProgress size={14} thickness={5} />

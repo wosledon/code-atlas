@@ -156,6 +156,9 @@ export type ChatResponse = {
 export type ChatStreamEvent =
   | { type: "meta"; project?: string; mode?: "llm" | "retrieval"; sources?: ChatSource[]; contexts?: ChatContext[] }
   | { type: "delta"; text: string }
+  /** Take back the provisional text and keep `text`: a tool round streamed a
+   * transcript that is not part of the answer. */
+  | { type: "reset"; text: string }
   | {
       type: "done";
       project?: string;

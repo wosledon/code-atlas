@@ -5,6 +5,8 @@ export type ChatTurn = {
   id?: string;
   role: "user" | "assistant";
   content: string;
+  /** Still receiving deltas: an unterminated mermaid fence is expected, not an error. */
+  streaming?: boolean;
   mode?: "llm" | "retrieval";
   sources?: ChatSource[];
   contexts?: ChatContext[];

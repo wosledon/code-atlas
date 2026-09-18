@@ -39,6 +39,7 @@ export default function SearchPage() {
       id: aid,
       role: "assistant",
       content: "",
+      streaming: true,
       mode: "llm",
       sources: [],
       contexts: [],
@@ -73,10 +74,15 @@ export default function SearchPage() {
           } else if (ev.type === "delta") {
             acc += ev.text;
             patchAssistant({ content: acc });
+          } else if (ev.type === "reset") {
+            // A tool round streamed first: it is not the answer, so drop it.
+            acc = ev.text;
+            patchAssistant({ content: acc });
           } else if (ev.type === "done") {
             sawDone = true;
             patchAssistant({
               content: ev.answer || acc || "（空回答）",
+              streaming: false,
               mode: ev.mode || "llm",
               sources: ev.sources || [],
               contexts: ev.contexts || [],
@@ -88,6 +94,7 @@ export default function SearchPage() {
       if (!sawDone) {
         patchAssistant({
           content: acc || "连接已结束，但没有收到回答。请检查模型配置后重试。",
+          streaming: false,
           mode: "retrieval",
           error: "连接中断：未收到流式完成事件",
         });
@@ -95,6 +102,7 @@ export default function SearchPage() {
     } catch (e) {
       patchAssistant({
         content: `请求失败：${String(e)}`,
+        streaming: false,
         mode: "retrieval",
         error: String(e),
       });

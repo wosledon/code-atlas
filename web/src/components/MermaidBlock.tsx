@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
-import { Box, Dialog, DialogContent, Typography } from "@mui/material";
+import { Box, CircularProgress, Dialog, DialogContent, Typography } from "@mui/material";
 import { useDiagramRender } from "./mermaid/useDiagramRender";
 import { DiagramToolbar } from "./mermaid/DiagramToolbar";
 import { DiagramCanvas } from "./mermaid/DiagramCanvas";
 
-export function MermaidBlock({ code }: { code: string }) {
-  const { svg, err, repaired } = useDiagramRender(code);
+export function MermaidBlock({ code, pending = false }: { code: string; pending?: boolean }) {
+  const { svg, err, repaired } = useDiagramRender(code, pending);
   const [zoom, setZoom] = useState(1);
   const [panKey, setPanKey] = useState(0);
   const [fullscreen, setFullscreen] = useState(false);
@@ -36,6 +36,28 @@ export function MermaidBlock({ code }: { code: string }) {
       document.body.style.overflow = prev;
     };
   }, [fullscreen]);
+
+  if (pending) {
+    return (
+      <Box
+        sx={{
+          border: "1px dashed",
+          borderColor: "divider",
+          borderRadius: 1.5,
+          my: 2,
+          py: 6,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 1,
+          color: "text.disabled",
+        }}
+      >
+        <CircularProgress size={14} thickness={5} />
+        <Typography variant="caption">图表生成中…</Typography>
+      </Box>
+    );
+  }
 
   if (err) {
     return (
