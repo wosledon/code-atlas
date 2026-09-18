@@ -1,10 +1,12 @@
 // Render-time repair for mermaid diagrams written by the LLM.
 //
-// Generated pages regularly contain flowchart syntax the mermaid parser
-// rejects, even though the surrounding markdown is fine:
+// Generated pages regularly contain syntax the mermaid parser rejects, even
+// though the surrounding markdown is fine:
 //   * a reserved word used as node id      graph["graph.rs"]  -> lexical error
 //   * an unquoted label starting with `/`  U[/api/pages]      -> parallelogram
 //   * an unquoted label containing `(`     C[serve()]         -> parse error
+//   * flowchart shapes in a sequence diagram, which has none:
+//     cli["atlas-cli<br/>main.rs:112"]     -> `participant cli as atlas-cli`
 // The writer is told to quote labels, but pages already on disk (and any future
 // slip) should still render, so the reader repairs the source *after* the
 // original failed to parse. A diagram that already renders is never rewritten.
@@ -31,8 +33,9 @@ const RESERVED_IDS = new Set([
 const DIRECTIVE =
   /^\s*(?:%%|style\b|classDef\b|class\b|click\b|linkStyle\b|direction\b|subgraph\b|accTitle\b|accDescr\b|end\s*;?\s*$)/;
 
-/** Only the flowchart grammar is repaired; other diagram kinds pass through. */
+/** The grammars this repairs; every other diagram kind passes through. */
 const FLOW_HEADER = /^\s*(?:flowchart|graph)\b/;
+const SEQUENCE_HEADER = /^\s*sequenceDiagram\b/;
 
 /** Characters mermaid reads as syntax when a label is left unquoted. */
 const NEEDS_QUOTE = /[(),"]|^\//;
@@ -74,23 +77,62 @@ interface Shape {
 }
 
 /**
- * Quote unquoted labels and rename reserved node ids in a flowchart. Returns
- * the input untouched (with `edits: 0`) when there is nothing safe to fix.
+ * Repair the source of a diagram that failed to parse. Flowchart labels and
+ * reserved ids are quoted/renamed; in a sequence diagram a participant declared
+ * with a flowchart shape is rewritten as a real declaration. Returns the input
+ * untouched (with `edits: 0`) when there is nothing safe to fix.
  */
 export function repairMermaid(code: string): MermaidRepair {
   const lines = code.split("\n");
   const header = lines.findIndex(
-    (line) => !line.trimStart().startsWith("%%") && FLOW_HEADER.test(line),
+    (line) =>
+      !line.trimStart().startsWith("%%") &&
+      (FLOW_HEADER.test(line) || SEQUENCE_HEADER.test(line)),
   );
   if (header === -1) return { code, edits: 0 };
+  const repair = SEQUENCE_HEADER.test(lines[header]) ? repairSequenceLine : repairFlowchartLine;
   let edits = 0;
   for (let i = 0; i < lines.length; i += 1) {
-    if (i === header || DIRECTIVE.test(lines[i])) continue;
-    const fixed = repairLine(lines[i]);
+    if (i === header) continue;
+    const fixed = repair(lines[i]);
     edits += fixed.edits;
     lines[i] = fixed.line;
   }
   return edits === 0 ? { code, edits: 0 } : { code: lines.join("\n"), edits };
+}
+
+/** Styling and subgraph boundaries are structure, not nodes. */
+function repairFlowchartLine(line: string): { line: string; edits: number } {
+  if (DIRECTIVE.test(line)) return { line, edits: 0 };
+  return repairLine(line);
+}
+
+/**
+ * `cli["atlas-cli<br/>main.rs:112"]` inside a `sequenceDiagram` is a flowchart
+ * node declaration: the sequence grammar has no shapes, so the parse dies on the
+ * first one. Mermaid spells the same thing `participant cli as atlas-cli…` (the
+ * label runs to end of line, so parentheses and slashes need no quoting). The
+ * whole line must be the declaration — a message line carries `->>` or `:` and
+ * is left alone.
+ */
+function repairSequenceLine(line: string): { line: string; edits: number } {
+  const unchanged = { line, edits: 0 };
+  const trimmed = line.trimStart();
+  if (trimmed === "" || trimmed.startsWith("%%")) return unchanged;
+  const indent = line.slice(0, line.length - trimmed.length);
+  const withKeyword = /^(actor|participant)\s+/.exec(trimmed);
+  const after = withKeyword ? trimmed.slice(withKeyword[0].length) : trimmed;
+  const id = /^[A-Za-z_][A-Za-z0-9_-]*/.exec(after)?.[0];
+  if (id === undefined) return unchanged;
+  const shape = readShape(after, id.length);
+  if (shape === null || !/^\s*$/.test(after.slice(shape.end + shape.close.length))) {
+    return unchanged;
+  }
+  const raw = shape.content.trim();
+  const label = isQuoted(raw) ? raw.slice(1, -1).replace(/#quot;/g, '"') : raw;
+  if (label === "") return unchanged;
+  const keyword = withKeyword ? withKeyword[1] : "participant";
+  return { line: `${indent}${keyword} ${id} as ${label}`, edits: 1 };
 }
 
 function repairLine(line: string): { line: string; edits: number } {
