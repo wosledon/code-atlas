@@ -154,6 +154,7 @@ export function ProjectRegistryCard({
               startIcon={<AddIcon />}
               disabled={busy || !newRoot.trim()}
               onClick={() => void onRegister()}
+              sx={{ flexShrink: 0, whiteSpace: "nowrap" }}
             >
               登记项目
             </Button>
