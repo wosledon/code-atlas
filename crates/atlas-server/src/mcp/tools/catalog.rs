@@ -44,7 +44,7 @@ pub(crate) fn tool_defs() -> Value {
                 "project": {"type": "string", "description": "project id; default = launch repo"}
             }
         })),
-        tool("atlas_list_projects", "List projects this MCP can update: launch repo plus atlas.projects.json entries.", json!({"type": "object", "properties": {}})),
+        tool("atlas_list_projects", "List projects this MCP can update: launch repo plus atlas.projects.json entries stored next to the atlas executable.", json!({"type": "object", "properties": {}})),
         tool("atlas_plan", "Preview the documentation page plan without calling an LLM.", json!({
             "type": "object",
             "properties": {

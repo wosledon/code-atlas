@@ -1,10 +1,10 @@
 //! Project registry: which repositories this Atlas surface can list / update.
 //!
 //! The launch repository is always present (id = directory name, alias
-//! `default`). Extra projects are declared in `atlas.projects.json` next to the
-//! launch root, or in the file named by `ATLAS_PROJECTS_FILE`. Storage under
-//! each project stays isolated: update resolves a project to its own
-//! `repo_root` + `AtlasConfig` + atlas/wiki path.
+//! `default`). Extra projects are declared in **`atlas.projects.json` next to
+//! the `atlas` executable** (or `ATLAS_PROJECTS_FILE`). Storage under each
+//! project stays isolated: update resolves a project to its own `repo_root` +
+//! `AtlasConfig` + atlas/wiki path.
 
 use crate::paths::repo_slug;
 use crate::AtlasConfig;
@@ -16,6 +16,8 @@ pub const REGISTRY_FILE: &str = "atlas.projects.json";
 pub const DEFAULT_PROJECT_ID: &str = "default";
 /// Written into a project's atlas data dir so centralized hubs can discover it.
 pub const PROJECT_MARKER_FILE: &str = ".atlas-project.json";
+/// Default centralized data root next to the atlas executable.
+pub const EXE_DATA_DIR_NAME: &str = ".atlas-data";
 
 /// One registered (non-launch) project on disk.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,8 +66,15 @@ pub struct ProjectRegistry {
 }
 
 impl ProjectRegistry {
+    /// Load using the default registry path (next to the atlas executable).
     pub fn load(launch_root: &Path) -> Self {
         let registry_path = registry_path_for(launch_root);
+        migrate_legacy_registry(launch_root, &registry_path);
+        Self::load_with_registry_path(launch_root, registry_path)
+    }
+
+    /// Load with an explicit registry file location (tests / overrides).
+    pub fn load_with_registry_path(launch_root: &Path, registry_path: PathBuf) -> Self {
         let entries = read_entries(&registry_path);
         Self {
             launch_root: launch_root.to_path_buf(),
@@ -138,9 +147,13 @@ impl ProjectRegistry {
                     bases.push(b);
                 }
             }
-            // Also scan sibling data dirs when strategy uses per-repo .atlas-data
-            // is intentionally skipped: without a marker we cannot recover root.
-            let _ = cfg.output.strategy;
+        }
+        // Centralized data next to the atlas executable (same layout as the registry).
+        if let Some(dir) = atlas_exe_dir() {
+            let b = dir.join(EXE_DATA_DIR_NAME);
+            if !bases.contains(&b) {
+                bases.push(b);
+            }
         }
         bases
     }
@@ -300,6 +313,19 @@ impl ProjectRegistry {
     }
 }
 
+/// Directory containing the running `atlas` (or test) executable.
+pub fn atlas_exe_dir() -> Option<PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf))
+}
+
+/// Resolve the project registry path.
+///
+/// Priority:
+/// 1. `ATLAS_PROJECTS_FILE` env
+/// 2. **`<atlas-exe-dir>/atlas.projects.json`** (control files follow the binary)
+/// 3. `<launch-root>/atlas.projects.json` if the executable dir is unknown
 pub fn registry_path_for(launch_root: &Path) -> PathBuf {
     if let Ok(p) = std::env::var("ATLAS_PROJECTS_FILE") {
         let p = p.trim();
@@ -307,7 +333,41 @@ pub fn registry_path_for(launch_root: &Path) -> PathBuf {
             return PathBuf::from(p);
         }
     }
+    if let Some(dir) = atlas_exe_dir() {
+        return dir.join(REGISTRY_FILE);
+    }
     launch_root.join(REGISTRY_FILE)
+}
+
+/// One-time copy of a repo-local registry into the exe-adjacent location.
+fn migrate_legacy_registry(launch_root: &Path, target: &Path) {
+    if target.exists() {
+        return;
+    }
+    let legacy = launch_root.join(REGISTRY_FILE);
+    if !legacy.is_file() {
+        return;
+    }
+    if legacy == target {
+        return;
+    }
+    if let Some(parent) = target.parent() {
+        if !parent.as_os_str().is_empty() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+    }
+    match std::fs::copy(&legacy, target) {
+        Ok(_) => tracing::info!(
+            "migrated project registry {} -> {}",
+            legacy.display(),
+            target.display()
+        ),
+        Err(e) => tracing::warn!(
+            "failed to migrate project registry {} -> {}: {e}",
+            legacy.display(),
+            target.display()
+        ),
+    }
 }
 
 /// Persist project identity next to atlas data so a hub can discover it later.
@@ -387,10 +447,15 @@ mod tests {
         p
     }
 
+    fn test_registry(launch: &Path) -> ProjectRegistry {
+        // Isolate from the real exe-adjacent registry file.
+        ProjectRegistry::load_with_registry_path(launch, launch.join("test.registry.json"))
+    }
+
     #[test]
     fn launch_project_resolves_by_default_alias_and_slug() {
         let root = temp_dir("launch");
-        let reg = ProjectRegistry::load(&root);
+        let reg = test_registry(&root);
         let launch = reg.resolve(None).unwrap();
         assert_eq!(launch.id, repo_slug(&root));
         assert!(launch.is_launch);
@@ -403,14 +468,14 @@ mod tests {
     fn register_resolve_unregister_roundtrip() {
         let launch = temp_dir("hub");
         let other = temp_dir("side-proj");
-        let mut reg = ProjectRegistry::load(&launch);
+        let mut reg = test_registry(&launch);
         let added = reg.register(&other, None, Some("Side")).unwrap();
         assert_eq!(added.id, repo_slug(&other));
         assert_eq!(added.name, "Side");
         assert!(!added.is_launch);
         assert!(reg.registry_path().exists(), "registry file missing at {:?}", reg.registry_path());
 
-        let again = ProjectRegistry::load(&launch);
+        let again = ProjectRegistry::load_with_registry_path(&launch, reg.registry_path().to_path_buf());
         let resolved = again.resolve(Some(&added.id)).unwrap();
         assert_eq!(resolved.root, other);
         assert!(again.list().iter().any(|p| p.id == added.id));
@@ -425,7 +490,7 @@ mod tests {
     #[test]
     fn cannot_unregister_launch() {
         let root = temp_dir("keep");
-        let mut reg = ProjectRegistry::load(&root);
+        let mut reg = test_registry(&root);
         let launch_id = reg.launch_id().to_string();
         assert!(reg.unregister(DEFAULT_PROJECT_ID).is_err());
         assert!(reg.unregister(&launch_id).is_err());
@@ -441,7 +506,7 @@ mod tests {
         fs::create_dir_all(&data_dir).unwrap();
         write_project_marker(&data_dir, &other).unwrap();
 
-        let mut reg = ProjectRegistry::load(&launch);
+        let mut reg = test_registry(&launch);
         let discovered = reg.discover_from_bases(&[external.clone()]);
         let again = reg.discover_from_bases(&[external.clone()]);
         assert!(
@@ -458,5 +523,17 @@ mod tests {
         fs::remove_dir_all(&launch).ok();
         fs::remove_dir_all(&other).ok();
         fs::remove_dir_all(&external).ok();
+    }
+
+    #[test]
+    fn registry_path_prefers_exe_dir() {
+        let launch = temp_dir("path-launch");
+        let path = registry_path_for(&launch);
+        if let Some(dir) = atlas_exe_dir() {
+            assert_eq!(path, dir.join(REGISTRY_FILE));
+        } else {
+            assert_eq!(path, launch.join(REGISTRY_FILE));
+        }
+        fs::remove_dir_all(&launch).ok();
     }
 }

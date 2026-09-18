@@ -1,9 +1,9 @@
 //! Project-dimension registry & update contract (unit + contract tests).
 
-use atlas_core::projects::{write_project_marker, ProjectRegistry, REGISTRY_FILE};
+use atlas_core::projects::{write_project_marker, ProjectRegistry};
 use atlas_core::repo_slug;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn temp_dir(tag: &str) -> PathBuf {
     let p = std::env::temp_dir().join(format!("atlas-server-proj-{tag}-{}", uuid::Uuid::new_v4()));
@@ -11,18 +11,23 @@ fn temp_dir(tag: &str) -> PathBuf {
     p
 }
 
+fn test_registry(launch: &Path) -> ProjectRegistry {
+    // Isolate from the exe-adjacent production registry.
+    ProjectRegistry::load_with_registry_path(launch, launch.join("test.registry.json"))
+}
+
 #[test]
 fn hot_reload_registry_picks_up_disk_changes() {
     let launch = temp_dir("hub");
     let other = temp_dir("side");
 
-    let mut reg = ProjectRegistry::load(&launch);
+    let mut reg = test_registry(&launch);
     let added = reg.register(&other, None, None).unwrap();
 
     // Simulate another process writing the registry file.
-    let path = launch.join(REGISTRY_FILE);
+    let path = reg.registry_path().to_path_buf();
     assert!(path.exists(), "register should persist {}", path.display());
-    let reloaded = ProjectRegistry::load(&launch);
+    let reloaded = ProjectRegistry::load_with_registry_path(&launch, path);
     let pref = reloaded.resolve(Some(&added.id)).unwrap();
     assert_eq!(pref.root, other);
 
@@ -39,7 +44,7 @@ fn discovery_from_external_marker_supports_project_dimension_update() {
     fs::create_dir_all(&data).unwrap();
     write_project_marker(&data, &target).unwrap();
 
-    let mut reg = ProjectRegistry::load(&launch);
+    let mut reg = test_registry(&launch);
     let found = reg.discover_from_bases(&[external.clone()]);
     assert_eq!(found.len(), 1);
     let pref = reg.resolve(Some(&repo_slug(&target))).unwrap();

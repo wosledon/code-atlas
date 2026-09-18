@@ -142,8 +142,8 @@ export default function SettingsPage() {
         <CardContent sx={{ p: 3 }}>
           <Typography variant="h6">项目注册表</Typography>
           <Typography color="text.secondary" sx={{ mt: 0.5, mb: 2 }}>
-            当前启动仓库始终在列表中；其他仓库写入 <code>atlas.projects.json</code>
-            。项目卡片与 MCP <code>atlas_update</code> 都按项目 id 更新文档。
+            当前启动仓库始终在列表中；其他仓库写入 <code>atlas.projects.json</code>（与 <code>atlas</code> 可执行文件同目录）。
+            项目卡片与 MCP <code>atlas_update</code> 都按项目 id 更新文档。
           </Typography>
           <Stack spacing={2}>
             {projects.map((p) => (

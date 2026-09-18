@@ -131,7 +131,7 @@ enum Cmd {
 enum ProjectCmd {
     /// List launch project + registered / discovered projects
     List,
-    /// Register a repository root in atlas.projects.json
+    /// Register a repository root in atlas.projects.json (next to the atlas executable)
     Add {
         root: PathBuf,
         #[arg(long)]
