@@ -21,6 +21,7 @@ pub(crate) fn list_projects_json(ctx: &McpCtx) -> Result<String> {
         .collect();
     Ok(serde_json::to_string_pretty(&json!({
         "launch": reg.launch_id(),
+        "default_project": ctx.default_project.clone().unwrap_or_else(|| reg.launch_id().to_string()),
         "registry_path": reg.registry_path().display().to_string(),
         "projects": items,
     }))?)
