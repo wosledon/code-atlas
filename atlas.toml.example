@@ -13,12 +13,12 @@ max_output_tokens = 16384
 concurrency = 5
 timeout_secs = 180
 retries = 3
-# 工具调用预算：每页最多执行 max_tool_rounds × 3 次 read_file/list_files/grep。
-# 它是**调用次数**而不是「轮」——模型常一轮只要一个文件，按轮算会让它读不够就
-# 被迫开写（页面变浅）。默认 2 即 6 次调用，覆盖一次页需要的 3–6 个文件。
-# 预算用尽后模型仍要文件时，会收到「预算已用尽，直接写正文」的回答并再问两次，
-# 之后本次生成就收尾；0 表示完全不给工具（纯证据生成）。
-# 每次调用都是一轮完整模型调用（重发整个对话）：调大同时增加耗时与 token。
+# 读取预算：每页 max_tool_rounds × 3 次「只读不写」的 read_file/list_files/grep。
+# 按调用次数而不是「轮」计——模型常一轮只要一个文件，按轮算会让它读不够就被迫开写。
+# **边写边读的调用不计费**：流式模型一边写页面一边读文件，那种调用在推进页面，
+# 掐掉它只会把页面截在半句话上；它们只受每页 max_tool_rounds × 3 × 4 次调用上限约束。
+# 预算用尽后模型仍要文件时，会收到「预算已用尽，直接写正文」的回答并再问两次，然后收尾。
+# 0 表示完全不给工具（纯证据生成）。每次调用都是一轮完整模型调用（重发整个对话）。
 max_tool_rounds = 2
 # Re-check each page against the depth bar and let the model expand it once when it is too thin.
 depth_pass = true

@@ -10,6 +10,18 @@ use super::{LlmClient, dialect, sse, truncate};
 /// each later round, so breadth here is paid for 2×.
 const CALLS_PER_ROUND: usize = 3;
 
+/// How far past the read budget a page may go while it keeps writing, as a
+/// multiple of that budget.
+///
+/// A streaming model writes *while* it reads, so a round that adds page text and
+/// asks for a file is progress: charging it would cut the page off mid-sentence
+/// once the model has read as many files as the budget allows. Only rounds that
+/// read and produce nothing are charged. Every round still re-sends the whole
+/// conversation, so this is the cost ceiling that bounds a page — it belongs to
+/// the config knob (`max_tool_rounds × CALLS_PER_ROUND × this`) rather than to a
+/// fixed number, so a repository that needs deeper reading can raise it.
+const PROGRESS_CEILING: usize = 4;
+
 /// Rounds spent re-telling the model that its tool budget is gone, before the
 /// call gives up and returns whatever prose it produced. The tool result is the
 /// signal that makes a model stop reading and write; simply not offering tools
@@ -80,6 +92,11 @@ impl LlmClient {
     /// The returned text is every prose segment in order — the page it was
     /// writing ([`merge_prose`]) — not just the last round's answer.
     ///
+    /// `max_rounds` bounds the reading: it is the number of `CALLS_PER_ROUND`
+    /// batches a page may spend on rounds that wrote *nothing*. Rounds that also
+    /// added page text keep their reads (up to [`PROGRESS_CEILING`]), because
+    /// cutting those off is what leaves a page half-written.
+    ///
     /// `exec` runs one tool call and returns the text handed back to the model.
     /// Errors thrown by `exec` are reported to the model as `ERROR: ...` so it
     /// can adapt instead of failing the page.
@@ -101,14 +118,18 @@ impl LlmClient {
         let mut messages = vec![ChatMessage::system(system), ChatMessage::user(user)];
         let mut prompt_tokens = 0i64;
         let mut completion_tokens = 0i64;
-        // The budget covers the whole page, not one round: `max_rounds` is what a
-        // page needs to read (the brief asks for 3–6 files), and models that ask
-        // for one file per round instead of batching them are the common case.
-        // Counting *calls* is what keeps those pages from running out of source
-        // and falling back to a structural template.
+        // Reading costs context, so it is bounded — but bounded by the rounds
+        // that read *without writing*. `max_rounds` is what a page needs to read
+        // (the brief asks for 3–6 files), and models that ask for one file per
+        // round instead of batching them are the common case. A round that also
+        // wrote page text is progress and its reads are not charged; only the
+        // ceiling stops those, because every round re-sends the conversation.
         let budget = max_rounds * CALLS_PER_ROUND;
-        let mut executed = 0usize;
+        let ceiling = budget * PROGRESS_CEILING;
+        let mut idle_calls = 0usize;
+        let mut total_calls = 0usize;
         let mut refusals = 0usize;
+        let mut noted_progress = false;
         let mut round = 0usize;
         // The page as it is being written. A streaming model keeps writing while
         // it reads, so prose and tool calls arrive in the same round and this
@@ -117,9 +138,10 @@ impl LlmClient {
         let mut body = String::new();
 
         loop {
-            // Nothing is offered once the budget is spent; the model is told why
-            // in the answer to the call it asks for anyway (below).
-            let offer: &[ToolSpec] = if executed < budget { tools } else { &[] };
+            // Tools are offered while the page is inside its budgets; the model
+            // is told why in the answer to the call it asks for anyway (below).
+            let offered = idle_calls <= budget && total_calls < ceiling;
+            let offer: &[ToolSpec] = if offered { tools } else { &[] };
             sse::emit_round_start();
             let LlmTurn {
                 text: raw,
@@ -150,16 +172,23 @@ impl LlmClient {
                     model,
                 });
             }
-            if executed >= budget {
+            // A round that added page text has moved the page forward, so its
+            // reads are granted past the read budget; a round that only read is
+            // charged, and runs out first. The ceiling applies to both.
+            let allow_calls = total_calls < ceiling && (merged || idle_calls < budget);
+            if !allow_calls {
                 // `max_rounds = 0` disables tools outright: nothing was promised,
                 // so nothing is refused.
                 let allowed = if budget == 0 { 0 } else { BUDGET_REFUSALS };
                 refusals += 1;
                 if refusals > allowed {
                     if budget > 0 {
-                        tracing::warn!(
-                            "工具调用预算已用尽（{max_rounds} 轮 × {CALLS_PER_ROUND} = {budget} 次），模型仍未写正文"
-                        );
+                        let why = if total_calls >= ceiling {
+                            format!("已达每页 {ceiling} 次调用上限")
+                        } else {
+                            format!("已读 {idle_calls} 次未写正文（读取预算 {budget} 次）")
+                        };
+                        tracing::warn!("工具调用停止：{why}，模型仍未写正文");
                     }
                     return Ok(LlmResponse {
                         text: body,
@@ -172,7 +201,14 @@ impl LlmClient {
                     });
                 }
                 tracing::info!(
-                    "工具调用预算已用尽（{budget} 次），模型仍请求工具：答复「直接写正文」（第 {refusals}/{allowed} 次）"
+                    "工具调用停止（{total_calls} 次调用 / {idle_calls} 次未写正文），模型仍请求工具：答复「直接写正文」（第 {refusals}/{allowed} 次）"
+                );
+            } else if merged && idle_calls >= budget && !noted_progress {
+                // Worth saying out loud: this is the page that used to be cut
+                // off mid-write for reading too many files.
+                noted_progress = true;
+                tracing::info!(
+                    "模型边写边读：已用 {total_calls} 次调用（读取预算 {budget} 次只对「只读不写」计费），继续写直到 {ceiling} 次上限"
                 );
             }
             // Echo back exactly the calls that get answered below, or the next
@@ -197,8 +233,13 @@ impl LlmClient {
                 tool_call_id: None,
             });
             for call in &calls {
-                let result = if executed < budget {
-                    executed += 1;
+                // Re-check the ceiling per call: a round that starts inside it
+                // must not step past it by answering three files at once.
+                let result = if allow_calls && total_calls < ceiling {
+                    total_calls += 1;
+                    if !merged {
+                        idle_calls += 1;
+                    }
                     match exec(&call.name, &call.arguments) {
                         Ok(out) => out,
                         Err(e) => format!("ERROR: {e:#}"),

@@ -364,6 +364,62 @@ async fn prose_continues_across_rounds() {
     assert!(resp.text.contains("## 数据流"), "{}", resp.text);
 }
 
+/// 边写边读的调用**不计入读取预算**：一页写了 6 段、每段读一个文件，
+/// 不能在第 3 次（`max_tool_rounds = 1` 的预算）就被掐断。
+#[tokio::test]
+async fn writing_rounds_do_not_charge_the_read_budget() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let sections = 6;
+    let mut replies: Vec<Vec<Part>> = (0..sections)
+        .map(|i| {
+            prose_then_call(
+                &format!("## 段{i}\n\n内容 {i}。"),
+                &format!("crates/f{i}.rs"),
+            )
+        })
+        .collect();
+    replies.push(text(FINAL));
+    let llm = client(fake_server(replies, seen.clone()));
+    let (ran, exec) = recorder();
+
+    let resp = llm
+        .chat_with_tools("system", "user", &[read_file_spec()], 1, exec)
+        .await
+        .expect("chat_with_tools");
+
+    let ran = ran.lock().expect("ran").clone();
+    assert_eq!(ran.len(), sections, "每次读都该真的执行：{ran:?}");
+    for i in 0..sections {
+        assert!(resp.text.contains(&format!("内容 {i}。")), "{}", resp.text);
+    }
+    assert!(resp.text.contains("定义"), "{}", resp.text);
+}
+
+/// 一直写也一直读的模型仍然收敛：超出读取预算后继续写没问题，
+/// 但每页总调用数卡在 ceiling（`max_tool_rounds × 3 × 4`）。
+#[tokio::test]
+async fn endless_writing_stops_at_the_call_ceiling() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    // 同一段反复重写：每轮都算「有进展」，于是只有 ceiling 能拦住它。
+    let llm = client(fake_server(
+        vec![prose_then_call("## 职责\n\n正文。", "crates/x.rs")],
+        seen.clone(),
+    ));
+    let (ran, exec) = recorder();
+
+    let resp = llm
+        .chat_with_tools("system", "user", &[read_file_spec()], 1, exec)
+        .await
+        .expect("chat_with_tools");
+
+    let ran = ran.lock().expect("ran").len();
+    assert_eq!(ran, 12, "1 轮 × 3 次 × 上限系数 4 = 12 次调用");
+    // 12 次执行 + 2 次被拒 + 1 次收尾
+    assert_eq!(seen.lock().expect("seen").len(), 15);
+    assert!(resp.text.contains("正文。"), "{}", resp.text);
+    assert!(!resp.text.contains("<tool_call"), "{}", resp.text);
+}
+
 /// 没有工具可给的普通问答里，转录不能被当成答案交给调用方。
 #[tokio::test]
 async fn plain_chat_drops_the_transcript() {
