@@ -1,12 +1,14 @@
 use super::evidence::{build_evidence, page_fingerprint, read_page_body};
 use super::prompt::prompt_salt;
+use super::quality::is_polluted;
 use super::run::RunContext;
 use super::types::PageJob;
 use super::*;
 
 /// Fingerprint every planned page and reuse the previous body whenever the
 /// repository evidence *and* the generation inputs (prompts, model, knobs) are
-/// unchanged: those pages skip the LLM.
+/// unchanged: those pages skip the LLM. Polluted bodies (tool transcripts, draft
+/// markers) are never reused — they force regeneration even when the hash matches.
 pub(super) fn prepare_jobs(run: &RunContext<'_>) -> Result<Vec<PageJob>> {
     let store = &run.session.store;
     let scan: &RepoScan = run.scan;
@@ -28,15 +30,26 @@ pub(super) fn prepare_jobs(run: &RunContext<'_>) -> Result<Vec<PageJob>> {
                 || read_page_body(&run.session.atlas_root.join(&page.rel_path));
             let reuse_body = if use_llm {
                 match &row {
-                    Some(r) if r.evidence_hash == fingerprint => body_on_disk(),
+                    Some(r) if r.evidence_hash == fingerprint => body_on_disk().filter(|b| {
+                        if is_polluted(b) {
+                            println!(
+                                "[atlas] {} 含工具调用残片，忽略复用，强制重生成",
+                                page.rel_path
+                            );
+                            false
+                        } else {
+                            true
+                        }
+                    }),
                     _ => None,
                 }
             } else {
                 None
             };
             // Only a page we could actually keep is worth protecting: templates
-            // are cheap to rebuild, real bodies are not.
-            let keep_body_on_failure = !prev_is_template && body_on_disk().is_some();
+            // are cheap to rebuild, real (clean) bodies are not.
+            let keep_body_on_failure = !prev_is_template
+                && body_on_disk().is_some_and(|b| !is_polluted(&b));
             Ok(PageJob {
                 page: page.clone(),
                 evidence,

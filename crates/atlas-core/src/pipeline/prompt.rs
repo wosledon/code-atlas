@@ -7,6 +7,13 @@
 use super::brief::page_brief;
 use super::*;
 
+/// Hard format bans that keep tool transcripts out of the wiki.
+const FORMAT_BANS: &str = r#"
+Output format bans (violations are a failed page):
+- Never emit tool-call markup, XML tags like <function=...>, <function_calls>, antml:*, JSON tool schemas, or any transcript of your tool usage. Write only the wiki markdown body.
+- Never emit YAML front matter, HTML comments used as generation markers, or "here is the page" preamble.
+- Do not paste raw tool arguments or raw command output dumps; summarize with path:line citations instead."#;
+
 /// First pass: write the page body from scratch.
 pub(super) fn generate_messages(
     cfg: &AtlasConfig,
@@ -38,9 +45,11 @@ pub(super) fn generate_messages(
          - End factual pages with `## Claims` (short verifiable bullets).\n\
          - Cite repository-relative paths in backticks so readers and search can jump to the code.\n\
          - This is a CODEBASE EXPLANATION wiki, not a product marketing site: dense technical \
-         writing, no marketing, no filler.\n\n\
+         writing, no marketing, no filler.\n\
+         {}\n\n\
          {}",
         cfg.output.language,
+        FORMAT_BANS,
         page_brief(page)
     );
     let user = format!(
@@ -75,9 +84,13 @@ pub(super) fn expand_messages(
          or generic advice. The draft below is your own previous output, so you already read most \
          of the code for it: read further only where a gap needs it, in a single round of \
          read_file / grep calls.\n\
-         - Keep the required outline, tables and diagrams; make the diagrams match the real code.\n\n\
+         - Keep the required outline, tables and diagrams; make the diagrams match the real code.\n\
+         - If the draft contains tool-call markup or transcripts, strip them entirely; output \
+         only clean wiki markdown.\n\n\
+         {}\n\n\
          {}",
         cfg.output.language,
+        FORMAT_BANS,
         page_brief(page)
     );
     let draft: String = draft.chars().take(12_000).collect();
@@ -110,8 +123,8 @@ pub(super) fn prompt_salt(
     let (system, _) = generate_messages(cfg, page, "");
     let (expand, _) = expand_messages(cfg, page, &[], "", "");
     format!(
-        "{system}\u{1f}{expand}\u{1f}model={provider}/{model}\u{1f}lang={}",
-        cfg.output.language
+        "{system}\u{1f}{expand}\u{1f}model={provider}/{model}\u{1f}lang={}\u{1f}focus={}\u{1f}desc={}",
+        cfg.output.language, page.focus, page.description
     )
 }
 

@@ -42,6 +42,7 @@ mod plan_modules;
 mod prepare;
 mod progress;
 mod prompt;
+mod quality;
 mod run;
 mod template;
 mod types;

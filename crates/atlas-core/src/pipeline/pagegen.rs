@@ -8,6 +8,7 @@ use super::deepen::deepen_page;
 use super::model_call::call_model;
 use super::progress::PageBar;
 use super::prompt::generate_messages;
+use super::quality::{is_polluted, sanitize_generated_body};
 use super::template::template_page_body;
 use super::types::{GeneratedPageWithMeta, PageJob, PageOutcome};
 use super::write::PageWriter;
@@ -167,30 +168,38 @@ impl PageGen {
         )
         .await
         {
-            Ok((usage, body)) if body.trim().chars().count() < 80 => {
-                self.counters.fail.fetch_add(1, Ordering::Relaxed);
-                if let Some(d) = &draft {
-                    d.restore();
-                }
-                if keep_body_on_failure {
-                    return self.keep_previous(
-                        &page,
-                        &fingerprint,
-                        Some(usage),
-                        "输出过短",
-                        pb,
-                        n,
-                        started,
-                    );
-                }
-                pb.done(format!(
-                    "~ {n}/{total} {} · 模板回退 · {:.1}s",
-                    page.rel_path,
-                    started.elapsed().as_secs_f64()
-                ));
-                self.templated(page, fingerprint, Some(usage))
-            }
             Ok((usage, body)) => {
+                // Defense in depth: strip tool transcripts; residual pollution
+                // means this model call failed quality and must not ship.
+                let body = sanitize_generated_body(&body);
+                if is_polluted(&body) || body.trim().chars().count() < 80 {
+                    self.counters.fail.fetch_add(1, Ordering::Relaxed);
+                    if let Some(d) = &draft {
+                        d.restore();
+                    }
+                    let why = if is_polluted(&body) {
+                        "含工具调用残片"
+                    } else {
+                        "输出过短"
+                    };
+                    if keep_body_on_failure {
+                        return self.keep_previous(
+                            &page,
+                            &fingerprint,
+                            Some(usage),
+                            why,
+                            pb,
+                            n,
+                            started,
+                        );
+                    }
+                    pb.done(format!(
+                        "~ {n}/{total} {} · 模板回退（{why}）· {:.1}s",
+                        page.rel_path,
+                        started.elapsed().as_secs_f64()
+                    ));
+                    return self.templated(page, fingerprint, Some(usage));
+                }
                 // Land the first draft before any depth rewrite so the reader
                 // (and the index) see content as soon as the model finishes.
                 // usage=None: the final write reports the accumulated totals.

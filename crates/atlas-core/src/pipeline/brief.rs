@@ -173,6 +173,11 @@ pub(crate) fn depth_gaps(body: &str, page: &PlannedPage) -> Vec<String> {
     if let Some(ph) = PLACEHOLDERS.iter().find(|p| body.contains(**p)) {
         gaps.push(format!("出现占位表述「{ph}」，必须替换为查证后的结论"));
     }
+    if let Some(marker) = super::quality::body_pollution(body) {
+        gaps.push(format!(
+            "正文含工具调用残片或生成标记「{marker}」：必须删除 transcript，只保留 wiki 正文"
+        ));
+    }
     if !body
         .lines()
         .any(|l| l.trim_start().starts_with('#') && l.contains("Claims"))

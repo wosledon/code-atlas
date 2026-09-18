@@ -1,7 +1,33 @@
 use super::*;
 
 use super::evidence::{entry_files, lang_of, module_scope, run_commands, scoped_files, todo_hotspots, top_dirs};
-use super::plan::{plan_pages};
+use super::plan::plan_pages;
+
+/// Heuristic directory responsibility from path segments (template mode only).
+fn dir_guess(dir: &str) -> &'static str {
+    let d = dir.to_ascii_lowercase();
+    if d.contains("test") {
+        "测试"
+    } else if d.contains("doc") {
+        "文档"
+    } else if d.contains("web") || d.contains("frontend") || d.contains("ui") {
+        "前端/UI"
+    } else if d.contains("cli") {
+        "命令行入口"
+    } else if d.contains("server") || d.contains("api") {
+        "服务/API"
+    } else if d.contains("core") || d.contains("lib") || d.contains("src") {
+        "核心逻辑"
+    } else if d.contains("store") || d.contains("db") || d.contains("data") {
+        "存储/数据"
+    } else if d.contains("util") || d.contains("common") || d.contains("shared") {
+        "共享工具"
+    } else if d.contains("config") {
+        "配置"
+    } else {
+        "见目录内入口文件"
+    }
+}
 
 /// Deterministic fallback used when no LLM is configured (or the model returned
 /// nothing usable). It is derived from the real scan so the wiki still explains
@@ -62,9 +88,9 @@ pub(crate) fn template_page_body(scan: &RepoScan, page: &PlannedPage, cfg: &Atla
         }
         "Onboarding" => {
             body.push_str("## 代码地图\n\n");
-            body.push_str("| 目录 | 源文件 | 职责（需人工补全） |\n| --- | --- | --- |\n");
+            body.push_str("| 目录 | 源文件 | 从命名推断的职责 |\n| --- | --- | --- |\n");
             for (d, n) in dirs.iter().take(20) {
-                body.push_str(&format!("| `{d}` | {n} |  |\n"));
+                body.push_str(&format!("| `{d}` | {n} | {} |\n", dir_guess(d)));
             }
             body.push_str("\n## 入口文件\n\n");
             for f in &entries {
@@ -83,6 +109,13 @@ pub(crate) fn template_page_body(scan: &RepoScan, page: &PlannedPage, cfg: &Atla
                 }
                 body.push_str("```\n");
             }
+            body.push_str("\n## Claims\n");
+            body.push_str(&format!(
+                "- 模板扫描识别到 {} 个源文件、入口 {}\n",
+                scan.files.iter().filter(|f| f.language.is_some()).count(),
+                entries.first().map(|f| format!("`{}`", f.rel)).unwrap_or_else(|| "(无)".into())
+            ));
+            body.push_str("- 本页由结构扫描生成；配置 LLM 后 `atlas update` 可得到带行号的调用链说明\n");
         }
         "Business" => {
             body.push_str("## 仓库自述\n\n");
@@ -141,8 +174,19 @@ pub(crate) fn template_page_body(scan: &RepoScan, page: &PlannedPage, cfg: &Atla
                 }
             }
             if count == 0 {
-                body.push_str("- 未提取到符号。\n");
+                body.push_str(&format!(
+                    "- 本扫描未从 `{}` 提取到可识别符号；请打开该目录下入口文件核对公开 API。\n",
+                    scope.as_deref().unwrap_or("(module)")
+                ));
             }
+            body.push_str("\n## Claims\n");
+            body.push_str(&format!(
+                "- 模块范围 `{}`，扫描到 {} 个源文件、启发式符号 {} 个\n",
+                scope.as_deref().unwrap_or("-"),
+                files.len(),
+                count
+            ));
+            body.push_str("- 正文为结构模板；配置 LLM 后更新可获得带行号的 API 与依赖说明\n");
         }
         "Data Model" => {
             body.push_str("## 检测到的数据相关文件\n\n");

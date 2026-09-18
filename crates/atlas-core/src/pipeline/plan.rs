@@ -242,7 +242,16 @@ pub(crate) fn plan_pages(scan: &RepoScan, mode: &str, instruction: Option<&str>)
     );
 
     if let Some(instr) = instruction {
-        if !instr.trim().is_empty() {
+        let instr = instr.trim();
+        if !instr.is_empty() {
+            // Run-level instruction applies to every page (focus feeds prompts
+            // and page_fingerprint, so a new instruction regenerates the wiki).
+            for p in &mut pages {
+                p.focus = format!(
+                    "{}\n\nRun-level instruction for this generation (apply when it touches this page): {instr}",
+                    p.focus
+                );
+            }
             pages.push(PlannedPage {
                 rel_path: "08-专项说明/专项说明.md".into(),
                 title: "专项说明".into(),
@@ -250,7 +259,10 @@ pub(crate) fn plan_pages(scan: &RepoScan, mode: &str, instruction: Option<&str>)
                 description: instr.chars().take(120).collect(),
                 tags: vec!["focus".into()],
                 module: None,
-                focus: instr.to_string(),
+                focus: format!(
+                    "Special-topic page driven by the run instruction. Expand it into a full \
+                     workflow page grounded in this repository.\n\nRun instruction: {instr}"
+                ),
             });
         }
     }

@@ -74,6 +74,47 @@ fn evidence_bundles_dependencies_commands_and_symbol_outline() {
     let _ = fs::remove_dir_all(&root);
 }
 
+/// 运行级 instruction 会写入每页 focus，并进入 salt/fingerprint：换指令应触发全量重算。
+#[test]
+fn run_instruction_rewrites_focus_and_invalidates_fingerprint() {
+    let (root, scan) = demo_repo("instr");
+    let base_pages = super::plan::plan_pages(&scan, "update", None);
+    let instr_pages = super::plan::plan_pages(&scan, "update", Some("修复污染页面，按当前代码重写"));
+    assert!(instr_pages.len() > base_pages.len(), "instruction adds a special-topic page");
+    let arch = instr_pages
+        .iter()
+        .find(|p| p.rel_path == "02-系统设计/整体架构.md")
+        .unwrap();
+    assert!(arch.focus.contains("Run-level instruction"), "{}", arch.focus);
+    assert!(arch.focus.contains("修复污染页面"));
+
+    let cfg = AtlasConfig::default();
+    let page = demo_page();
+    let mut with_instr = page.clone();
+    with_instr.focus = format!("{}\n\nRun-level instruction: 修复污染页面", page.focus);
+    let e = build_evidence(&scan, &page);
+    let salt_a = super::prompt::prompt_salt(&cfg, &page, "p", "m");
+    let salt_b = super::prompt::prompt_salt(&cfg, &with_instr, "p", "m");
+    assert_ne!(salt_a, salt_b);
+    assert_ne!(
+        page_fingerprint(&scan, &page, &e, &salt_a),
+        page_fingerprint(&scan, &with_instr, &e, &salt_b)
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// 污染正文不得进入复用路径：quality 门禁与 depth_gaps 必须拦截工具调用残片。
+#[test]
+fn polluted_bodies_fail_quality_gate() {
+    use super::quality::is_polluted;
+    let dirty = "## 职责\n\n<function=read_file>\nkeep\n</function>\n\n## Claims\n- x\n";
+    assert!(is_polluted(dirty));
+    let gaps = super::brief::depth_gaps(&dirty, &demo_page());
+    assert!(gaps.iter().any(|g| g.contains("工具调用残片")), "{gaps:?}");
+    let cleaned = super::quality::sanitize_generated_body(dirty);
+    assert!(!is_polluted(&cleaned));
+}
+
 /// 指纹必须把「生成方式」也算进去：改了提示词、换了模型或调了深度开关后，
 /// `atlas update` 必须重算这一页，而不是静默复用旧正文。
 #[test]
