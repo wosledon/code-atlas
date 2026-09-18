@@ -37,7 +37,14 @@ impl std::fmt::Debug for LlmSection {
         f.debug_struct("LlmSection")
             .field("provider", &self.provider)
             .field("model", &self.model)
-            .field("api_key", &if self.api_key.is_empty() { "…" } else { "«redacted»" })
+            .field(
+                "api_key",
+                &if self.api_key.is_empty() {
+                    "…"
+                } else {
+                    "«redacted»"
+                },
+            )
             .field("base_url", &self.base_url)
             .field("temperature", &self.temperature)
             .field("max_output_tokens", &self.max_output_tokens)
@@ -71,9 +78,10 @@ fn default_concurrency() -> usize {
 }
 
 fn default_tool_rounds() -> usize {
-    // 2 tool rounds (3 model calls/page max): enough to batch a handful of
-    // reads and answer. Round trips are the dominant wall-clock and token cost,
-    // because every round re-sends the whole conversation.
+    // 2 read rounds (6 read-only calls/page, see `READS_PER_ROUND`): enough to
+    // read the 3–6 files a page is built from and answer. Round trips are the
+    // dominant wall-clock and token cost, because every round re-sends the whole
+    // conversation.
     2
 }
 
@@ -270,7 +278,12 @@ pub struct AnalyzeSection {
 }
 
 fn default_langs() -> Vec<String> {
-    vec!["rust".into(), "typescript".into(), "javascript".into(), "python".into()]
+    vec![
+        "rust".into(),
+        "typescript".into(),
+        "javascript".into(),
+        "python".into(),
+    ]
 }
 
 impl Default for AnalyzeSection {

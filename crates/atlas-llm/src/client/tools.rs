@@ -7,9 +7,14 @@ use crate::wire::{ChatMessage, ToolCallFunction, ToolCallPayload};
 
 use super::{LlmClient, dialect, sse, truncate};
 
-/// Calls answered per round. Every result stays in the history and is re-sent on
-/// each later round, so breadth here is paid for 2×.
-const CALLS_PER_ROUND: usize = 3;
+/// Read-budget unit: `max_tool_rounds` is worth this many read-only calls.
+///
+/// This was once the cap on calls answered *per round* as well, and that split a
+/// batch the prompt had just asked for ("batch every read_file / grep call into
+/// ONE round") across several rounds. Every round re-sends the whole
+/// conversation, so splitting a batch cost more than answering it once — and the
+/// extra rounds were charged to the read budget as well.
+const READS_PER_ROUND: usize = 3;
 
 /// How far past the read budget a page may go while it keeps writing, as a
 /// multiple of that budget.
@@ -153,10 +158,11 @@ impl LlmClient {
     /// The returned text is every prose segment in order — the page it was
     /// writing ([`merge_prose`]) — not just the last round's answer.
     ///
-    /// `max_rounds` bounds the reading: it is the number of `CALLS_PER_ROUND`
-    /// batches a page may spend on rounds that wrote *nothing*. Rounds that also
-    /// added page text keep their reads (up to [`PROGRESS_CEILING`]), because
-    /// cutting those off is what leaves a page half-written.
+    /// `max_rounds` bounds the reading: it is worth [`READS_PER_ROUND`]
+    /// read-only calls each, and only rounds that wrote *nothing* spend them.
+    /// Rounds that also added page text keep their reads (up to
+    /// [`PROGRESS_CEILING`]), because cutting those off is what leaves a page
+    /// half-written.
     ///
     /// `exec` runs one tool call and returns the text handed back to the model.
     /// Errors thrown by `exec` are reported to the model as `ERROR: ...` so it
@@ -185,7 +191,7 @@ impl LlmClient {
         // round instead of batching them are the common case. A round that also
         // wrote page text is progress and its reads are not charged; only the
         // ceiling stops those, because every round re-sends the conversation.
-        let budget = max_rounds * CALLS_PER_ROUND;
+        let budget = max_rounds * READS_PER_ROUND;
         let ceiling = budget * PROGRESS_CEILING;
         let mut idle_calls = 0usize;
         let mut total_calls = 0usize;
@@ -243,8 +249,11 @@ impl LlmClient {
             }
             // Split the requested calls into ones that are new to this page and
             // ones the model is asking for again; only the new ones are run.
+            // Nothing is dropped here: the read budget is what limits a page, and
+            // it is enforced per call below — dropping the tail of a batch would
+            // leave the model waiting for results it asked for.
             let mut marked: Vec<(ToolCall, bool)> = Vec::new();
-            for call in calls.into_iter().take(CALLS_PER_ROUND) {
+            for call in calls {
                 let fresh = seen.insert(call_key(&call.name, &call.arguments));
                 marked.push((call, fresh));
             }
@@ -339,14 +348,16 @@ impl LlmClient {
                 ),
                 tool_call_id: None,
             });
+            let mut refused_here = 0usize;
             for (call, fresh) in &marked {
+                // Per call, not per round: a round that starts inside the budget
+                // must not step past it by answering a whole batch at once.
+                let room = total_calls < ceiling && (merged.advanced || idle_calls < budget);
                 let result = if !fresh {
                     // The model asked again for something it already has: the
                     // answer is in the conversation it just re-sent.
                     DUPLICATE_CALL.to_string()
-                } else if allow_calls && total_calls < ceiling {
-                    // Re-check the ceiling per call: a round that starts inside
-                    // it must not step past it by answering three files at once.
+                } else if room {
                     total_calls += 1;
                     if !merged.advanced {
                         idle_calls += 1;
@@ -356,10 +367,17 @@ impl LlmClient {
                         Err(e) => format!("ERROR: {e:#}"),
                     }
                 } else {
+                    refused_here += 1;
                     BUDGET_SPENT.to_string()
                 };
                 // Keep follow-up rounds cheap: long dumps bloat every later prompt.
                 messages.push(ChatMessage::tool(&truncate(&result, 6_000), &call.id));
+            }
+            if refused_here > 0 && allow_calls {
+                // The batch outran the budget mid-round: the tail is answered, so
+                // the model knows to write, but this round never opened as a
+                // refusal and must not count against the two it gets.
+                tracing::info!("本轮 {refused_here} 个调用超出读取预算，已答复「直接写正文」");
             }
             // After the tool replies (an assistant `tool_calls` message must be
             // followed by them), the corrective instruction closes the round.

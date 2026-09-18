@@ -31,6 +31,18 @@ fn dialect_for(path: &str) -> String {
     )
 }
 
+/// 一轮里请求多个文件——提示词明确要求的批量读（"batch every read_file /
+/// grep call into ONE round"）。
+fn dialect_batch(paths: &[&str]) -> String {
+    let mut out = String::from("我先把这一页需要的文件一次读完。\n\n");
+    for path in paths {
+        out.push_str(&format!(
+            "<tool_call>\n<function=read_file>\n<parameter=path>\n{path}\n</parameter>\n</function>\n</tool_call>\n"
+        ));
+    }
+    out
+}
+
 const FINAL: &str = "## 职责\n\n`crates/x.rs:121` 定义了入口函数，供 CLI 调用。\n";
 
 /// One streamed chunk of a fake reply: page text, or a structured tool call.
@@ -279,6 +291,81 @@ async fn one_file_per_round_still_reads_a_pages_worth_of_files() {
     ids.dedup();
     assert_eq!(ids.len(), total, "call ids repeat across rounds: {ids:?}");
     assert!(total >= files.len(), "every read round is in the history");
+}
+
+/// 一轮批量读：模型按提示词把一页需要的文件一次请求完，这些调用必须**同一轮全答**。
+///
+/// 旧行为是每轮只答前 3 个（`take(CALLS_PER_ROUND)`），把一批拆成多轮：每轮都要
+/// 重发整个对话，拆轮比一次答完更贵；而多出来的轮次还要按「只读不写」计费，
+/// 于是 6 个文件的批量读完两轮就把读取预算耗光，接着被答复「直接写正文」——
+/// 页面还没开始写就被判成卡死。
+#[tokio::test]
+async fn a_batched_round_reads_every_file_it_asked_for() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let files = ["a.rs", "b.rs", "c.rs", "d.rs", "e.rs", "f.rs"];
+    let replies = vec![text(&dialect_batch(&files)), text(FINAL)];
+    let llm = client(fake_server(replies, seen.clone()));
+    let (ran, exec) = recorder();
+
+    let resp = llm
+        .chat_with_tools("system", "user", &[read_file_spec()], 2, exec)
+        .await
+        .expect("chat_with_tools");
+
+    let ran = ran.lock().expect("ran").clone();
+    assert_eq!(ran.len(), files.len(), "一批里的每个文件都要执行：{ran:?}");
+    for path in files {
+        assert!(
+            ran.iter().any(|line| line.contains(path)),
+            "{path} 没被执行：{ran:?}"
+        );
+    }
+    assert!(resp.text.contains("定义"), "{}", resp.text);
+    assert!(!resp.text.contains("<tool_call"), "{}", resp.text);
+
+    // 一轮批量 + 一轮写作。拆成多轮会重发整个对话，也会多花读取预算。
+    assert_eq!(seen.lock().expect("seen").len(), 2, "批量读取不能拆成多轮");
+}
+
+/// 批量超过读取预算时，多出来的调用要**明确答复**而不是被静默丢掉：
+/// 模型得知道哪些没有结果，才能接着写正文。
+#[tokio::test]
+async fn a_batch_beyond_the_budget_is_answered_not_dropped() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let files = ["a.rs", "b.rs", "c.rs", "d.rs", "e.rs"];
+    // max_tool_rounds = 1 → 读取预算 3 次，一轮请求 5 个文件。
+    let replies = vec![text(&dialect_batch(&files)), text(FINAL)];
+    let llm = client(fake_server(replies, seen.clone()));
+    let (ran, exec) = recorder();
+
+    let resp = llm
+        .chat_with_tools("system", "user", &[read_file_spec()], 1, exec)
+        .await
+        .expect("chat_with_tools");
+
+    let ran = ran.lock().expect("ran").clone();
+    assert_eq!(ran.len(), 3, "预算内执行 3 次：{ran:?}");
+
+    let requests = seen.lock().expect("seen");
+    let follow_up = &requests[1];
+    // 每个调用都有对应的 tool 消息，否则 assistant 的 tool_calls 无人应答。
+    assert_eq!(
+        follow_up.matches(r#""role":"tool""#).count(),
+        files.len(),
+        "5 个调用都要有答复：{follow_up}"
+    );
+    assert!(
+        follow_up.contains("工具调用预算已用尽"),
+        "超出的调用要明确告知：{follow_up}"
+    );
+    // 超出的两个不执行，其结果文本只有「预算已用尽」。
+    assert_eq!(
+        follow_up.matches("pub fn main()").count(),
+        3,
+        "只有预算内的调用拿到真实结果：{follow_up}"
+    );
+
+    assert!(resp.text.contains("定义"), "{}", resp.text);
 }
 
 /// 只读不写：读完读取预算后不再执行，并明确告诉模型「直接写正文」——
