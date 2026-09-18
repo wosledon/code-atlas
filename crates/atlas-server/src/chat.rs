@@ -1,7 +1,7 @@
 use super::*;
 use crate::auth::{authorized, deny};
-use crate::common::open_store;
-use crate::search::search_mode;
+use crate::common::{open_project_store, resolve_project};
+use crate::search::search_mode_for;
 use axum::body::Body;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
@@ -18,14 +18,17 @@ pub(crate) struct ChatRequest {
     messages: Vec<ChatMessageIn>,
     #[serde(default)]
     top_k: Option<i64>,
+    /// Project id; empty → launch project.
+    #[serde(default)]
+    project: Option<String>,
 }
 
 /// Streaming knowledge-base chat.
 ///
 /// SSE frames (each `data: <json>\n\n`):
-/// - `{"type":"meta","mode","sources","contexts"}`
+/// - `{"type":"meta","project","mode","sources","contexts"}`
 /// - `{"type":"delta","text"}` — answer tokens while the LLM streams
-/// - `{"type":"done","mode","answer","sources","contexts","usage"?}` — final
+/// - `{"type":"done","project","mode","answer","sources","contexts","usage"?}` — final
 pub(crate) async fn kb_chat(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -49,12 +52,16 @@ pub(crate) async fn kb_chat(
             .into_response();
     }
 
-    let store = match open_store(&state) {
+    let pref = match resolve_project(&state, body.project.as_deref()) {
+        Ok(p) => p,
+        Err(e) => return crate::common::err(e),
+    };
+    let store = match open_project_store(&pref) {
         Ok(s) => s,
         Err(e) => return crate::common::err(e),
     };
     let top_k = body.top_k.unwrap_or(8);
-    let hits = match store.search(&user_msg, top_k, search_mode(&state)) {
+    let hits = match store.search(&user_msg, top_k, search_mode_for(&pref)) {
         Ok(h) => h,
         Err(e) => return crate::common::err(e),
     };
@@ -92,13 +99,13 @@ pub(crate) async fn kb_chat(
     let retrieval_answer = format_hits_as_answer(&user_msg, &hits);
 
     let llm = atlas_llm::LlmClient::from_env(atlas_llm::LlmConfig {
-        provider: state.cfg.llm.provider.clone(),
-        model: state.cfg.llm.model.clone(),
-        api_key: state.cfg.llm.api_key.clone(),
-        base_url: state.cfg.llm.base_url.clone(),
+        provider: pref.cfg.llm.provider.clone(),
+        model: pref.cfg.llm.model.clone(),
+        api_key: pref.cfg.llm.api_key.clone(),
+        base_url: pref.cfg.llm.base_url.clone(),
         temperature: 0.2,
         max_output_tokens: 2048,
-        timeout_secs: state.cfg.llm.timeout_secs.min(30),
+        timeout_secs: pref.cfg.llm.timeout_secs.min(30),
         retries: 0,
     });
     let llm = match llm {
@@ -107,6 +114,8 @@ pub(crate) async fn kb_chat(
     };
 
     // Build the grounded prompt only when an LLM is available.
+    let language = pref.cfg.output.language.clone();
+    let project_id = pref.id.clone();
     let prompt = llm.as_ref().map(|_| {
         let mut context = String::new();
         for (i, h) in hits.iter().enumerate() {
@@ -144,7 +153,7 @@ pub(crate) async fn kb_chat(
              Use ONLY the provided repository/wiki context for factual claims. \
              Cite page paths like `atlas/architecture/overview.md` when used. \
              If context is insufficient, say so briefly.\n\n## Context\n{}",
-            state.cfg.output.language, context
+            language, context
         );
         (system, user)
     });
@@ -157,6 +166,7 @@ pub(crate) async fn kb_chat(
         let _ = tx
             .send(emit(json!({
                 "type": "meta",
+                "project": project_id,
                 "mode": if llm.is_some() { "llm" } else { "retrieval" },
                 "sources": sources_meta,
                 "contexts": contexts_meta,
@@ -167,6 +177,7 @@ pub(crate) async fn kb_chat(
             let _ = tx
                 .send(emit(json!({
                     "type": "done",
+                    "project": project_id,
                     "mode": "retrieval",
                     "answer": retrieval_answer,
                     "sources": sources,
@@ -188,6 +199,7 @@ pub(crate) async fn kb_chat(
         let frame = match result {
             Ok(resp) if !resp.text.trim().is_empty() => json!({
                 "type": "done",
+                "project": project_id,
                 "mode": "llm",
                 "answer": resp.text,
                 "model": resp.model,
@@ -202,6 +214,7 @@ pub(crate) async fn kb_chat(
                 tracing::warn!("kb chat llm returned empty text, falling back to retrieval");
                 json!({
                     "type": "done",
+                    "project": project_id,
                     "mode": "retrieval",
                     "answer": retrieval_answer,
                     "sources": sources,
@@ -213,6 +226,7 @@ pub(crate) async fn kb_chat(
                 tracing::warn!("kb chat llm failed, falling back to retrieval: {e:#}");
                 json!({
                     "type": "done",
+                    "project": project_id,
                     "mode": "retrieval",
                     "answer": retrieval_answer,
                     "sources": sources,

@@ -1,14 +1,18 @@
 use super::*;
 use crate::auth::{authorized, deny};
-use crate::common::{err, open_store};
+use crate::common::{err, open_project_store, resolve_project};
 use serde::Serialize;
 
 #[derive(Serialize)]
 pub(crate) struct GraphPayload {
+    project: String,
     nodes: Vec<serde_json::Value>,
     edges: Vec<serde_json::Value>,
 }
 
+fn project_from_query(state: &AppState, q: &std::collections::HashMap<String, String>) -> Result<atlas_core::projects::ProjectRef> {
+    resolve_project(state, q.get("project").map(|s| s.as_str()))
+}
 
 pub(crate) async fn list_entities(
     State(state): State<AppState>,
@@ -18,22 +22,33 @@ pub(crate) async fn list_entities(
     if !authorized(&state, &headers) {
         return deny();
     }
+    let pref = match project_from_query(&state, &q) {
+        Ok(p) => p,
+        Err(e) => return err(e),
+    };
     let kind = q.get("kind").map(|s| s.as_str());
-    match open_store(&state) {
+    match open_project_store(&pref) {
         Ok(store) => match store.list_entities(kind, 500) {
-            Ok(list) => Json(list).into_response(),
+            Ok(list) => Json(json!({"project": pref.id, "entities": list})).into_response(),
             Err(e) => err(e),
         },
         Err(e) => err(e),
     }
 }
 
-
-pub(crate) async fn graph_nodes(State(state): State<AppState>, headers: HeaderMap) -> Response {
+pub(crate) async fn graph_nodes(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<std::collections::HashMap<String, String>>,
+) -> Response {
     if !authorized(&state, &headers) {
         return deny();
     }
-    let store = match open_store(&state) {
+    let pref = match project_from_query(&state, &q) {
+        Ok(p) => p,
+        Err(e) => return err(e),
+    };
+    let store = match open_project_store(&pref) {
         Ok(s) => s,
         Err(e) => return err(e),
     };
@@ -61,27 +76,39 @@ pub(crate) async fn graph_nodes(State(state): State<AppState>, headers: HeaderMa
         .into_iter()
         .map(|(src, dst, rel)| json!({"source": src, "target": dst, "rel": rel}))
         .collect();
-    Json(GraphPayload { nodes, edges }).into_response()
+    Json(GraphPayload {
+        project: pref.id.clone(),
+        nodes,
+        edges,
+    })
+    .into_response()
 }
-
 
 pub(crate) async fn neighborhood(
     State(state): State<AppState>,
     headers: HeaderMap,
     AxPath(id): AxPath<String>,
+    Query(q): Query<std::collections::HashMap<String, String>>,
 ) -> Response {
     if !authorized(&state, &headers) {
         return deny();
     }
-    let store = match open_store(&state) {
+    let pref = match project_from_query(&state, &q) {
+        Ok(p) => p,
+        Err(e) => return err(e),
+    };
+    let store = match open_project_store(&pref) {
         Ok(s) => s,
         Err(e) => return err(e),
     };
     match store.neighborhood(&id, 200) {
-        Ok(rows) => Json(rows
-            .into_iter()
-            .map(|(src, dst, rel)| json!({"source": src, "target": dst, "rel": rel}))
-            .collect::<Vec<_>>())
+        Ok(rows) => Json(json!({
+            "project": pref.id,
+            "relations": rows
+                .into_iter()
+                .map(|(src, dst, rel)| json!({"source": src, "target": dst, "rel": rel}))
+                .collect::<Vec<_>>(),
+        }))
         .into_response(),
         Err(e) => err(e),
     }

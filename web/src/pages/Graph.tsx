@@ -1,22 +1,25 @@
 import { useEffect, useMemo, useState } from "react";
 import { Box, Stack, Typography } from "@mui/material";
 import { api, GraphData } from "../lib/api";
+import { useProject } from "../lib/projectContext";
+import { withProject } from "../lib/routes";
 import { GraphLegend } from "../components/graph/GraphLegend";
 import { KindFilter } from "../components/graph/KindFilter";
 import { useForceGraph } from "../components/graph/useForceGraph";
 
 /** Force graph: zoom/pan/drag, light canvas, soft links. Fills the app shell. */
 export default function GraphPage() {
+  const { projectId } = useProject();
   const [data, setData] = useState<GraphData | null>(null);
   const [kindFilter, setKindFilter] = useState("all");
 
   useEffect(() => {
-    api<GraphData>("/api/graph/nodes")
+    api<GraphData>(withProject("/api/graph/nodes", projectId))
       .then((d) => {
         setData(d);
       })
       .catch(() => setData({ nodes: [], edges: [] }));
-  }, []);
+  }, [projectId]);
 
   const kinds = useMemo(
     () => Array.from(new Set((data?.nodes || []).map((n) => n.kind))),

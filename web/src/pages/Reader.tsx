@@ -27,6 +27,9 @@ import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
 import SubjectIcon from "@mui/icons-material/Subject";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../lib/api";
+import type { PageResponse, TreeResponse } from "../lib/api";
+import { useProject } from "../lib/projectContext";
+import { withProject } from "../lib/routes";
 import { MarkdownView, extractHeadings } from "../components/MarkdownView";
 
 type TreeNode = {
@@ -38,6 +41,7 @@ type TreeNode = {
 
 export default function ReaderPage() {
   const [params, setParams] = useSearchParams();
+  const { projectId } = useProject();
   const [tree, setTree] = useState<TreeNode | null>(null);
   const [content, setContent] = useState("");
   const [current, setCurrent] = useState<string | null>(params.get("p"));
@@ -49,6 +53,8 @@ export default function ReaderPage() {
   const currentRef = useRef<string | null>(params.get("p"));
   const treeRef = useRef<TreeNode | null>(null);
   const docRef = useRef<HTMLDivElement | null>(null);
+  const projectRef = useRef<string | null>(projectId);
+  projectRef.current = projectId;
 
   const folderIds = useMemo(() => collectFolderIds(tree), [tree]);
   const allOpen = folderIds.length > 0 && folderIds.every((id) => expanded[id]);
@@ -57,12 +63,18 @@ export default function ReaderPage() {
   const loadPage = async (p: string, syncUrl = true) => {
     setCurrent(p);
     currentRef.current = p;
-    if (syncUrl) setParams({ p }, { replace: true });
+    if (syncUrl) {
+      const next = new URLSearchParams();
+      next.set("p", p);
+      const proj = projectRef.current;
+      if (proj) next.set("project", proj);
+      setParams(next, { replace: true });
+    }
     setExpanded((e) => ({ ...e, ...ancestorsOf(treeRef.current, p) }));
     setActiveHeading(null);
     if (docRef.current) docRef.current.scrollTop = 0;
     try {
-      const res = await api<{ content: string }>(`/api/pages/${encodePath(p)}`);
+      const res = await api<PageResponse>(withProject(`/api/pages/${encodePath(p)}`, projectRef.current));
       setContent(res.content);
       setErr(null);
     } catch (e) {
@@ -72,8 +84,9 @@ export default function ReaderPage() {
   };
 
   useEffect(() => {
-    api<TreeNode>("/api/tree")
-      .then((t) => {
+    api<TreeResponse>(withProject("/api/tree", projectId))
+      .then((res) => {
+        const t = res.tree;
         setTree(t);
         treeRef.current = t;
         const deepLinked = currentRef.current;

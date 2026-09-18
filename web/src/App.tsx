@@ -4,10 +4,14 @@ import {
   Box,
   Container,
   Drawer,
+  FormControl,
+  InputLabel,
   List,
   ListItemButton,
   ListItemIcon,
   ListItemText,
+  MenuItem,
+  Select,
   Stack,
   Toolbar,
   Typography,
@@ -28,6 +32,7 @@ import ReaderPage from "./pages/Reader";
 import SettingsPage from "./pages/Settings";
 import { globalMotion } from "./theme/motion.css";
 import { api } from "./lib/api";
+import { ProjectProvider, useProject } from "./lib/projectContext";
 
 const drawerWidth = 240;
 const nav = [
@@ -39,31 +44,26 @@ const nav = [
   { to: "/settings", label: "设置", icon: <SettingsIcon fontSize="small" /> },
 ];
 
-// Routes that manage their own scrolling: they get an app-shell layout where the
-// page itself never scrolls, so inner panes (tree, document) scroll independently.
-// They also skip the centered max-width container so the canvas/tree can use the
-// full remaining width.
 const FULL_HEIGHT_ROUTES = ["/reader", "/graph"];
 
 export default function App() {
-  const [health, setHealth] = useState<{ model?: string; provider?: string } | null>(null);
+  return (
+    <ProjectProvider>
+      <AppShell />
+    </ProjectProvider>
+  );
+}
+
+function AppShell() {
+  const [health, setHealth] = useHealth();
   const { pathname } = useLocation();
   const appShell = FULL_HEIGHT_ROUTES.includes(pathname);
-
-  useEffect(() => {
-    const url = new URLSearchParams(window.location.search).get("t");
-    if (url) localStorage.setItem("atlas_token", url);
-    api<{ model: string; provider: string }>("/api/health")
-      .then(setHealth)
-      .catch(() => setHealth(null));
-  }, []);
-
   const styleTag = useMemo(() => globalMotion, []);
+  const { projectId, setProjectId, projects } = useProject();
 
   return (
     <Box sx={{ display: "flex", minHeight: "100vh", bgcolor: "background.default" }}>
       <style>{styleTag}</style>
-      {/* soft ambient blobs */}
       <Box
         sx={{
           position: "fixed",
@@ -71,7 +71,7 @@ export default function App() {
           pointerEvents: "none",
           zIndex: 0,
           background:
-            "radial-gradient(600px 300px at 10% -10%, rgba(26,111,181,0.10), transparent 60%), radial-gradient(500px 280px at 90% 0%, rgba(61,139,110,0.08), transparent 55%)",
+            "radial-gradient(600px 300px at 10% -10%, rgba(26,111,181,0.10), transparent 60%), radial-gradient(500px 300px at 90% 0%, rgba(61,139,110,0.08), transparent 55%)",
         }}
       />
       <AppBar
@@ -126,6 +126,23 @@ export default function App() {
           },
         }}
       >
+        {projects.length > 0 && (
+          <FormControl size="small" sx={{ mb: 1.5, mx: 0.5 }}>
+            <InputLabel id="global-project-label">当前项目</InputLabel>
+            <Select
+              labelId="global-project-label"
+              label="当前项目"
+              value={projectId ?? ""}
+              onChange={(e) => setProjectId(e.target.value || null)}
+            >
+              {projects.map((p) => (
+                <MenuItem key={p.id} value={p.id}>
+                  {p.name || p.id}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+        )}
         <List sx={{ gap: 0.5 }}>
           {nav.map((n) => (
             <ListItemButton
@@ -197,6 +214,18 @@ export default function App() {
       </Box>
     </Box>
   );
+}
+
+function useHealth() {
+  const [health, setHealth] = useState<{ model?: string; provider?: string } | null>(null);
+  useEffect(() => {
+    const url = new URLSearchParams(window.location.search).get("t");
+    if (url) localStorage.setItem("atlas_token", url);
+    api<{ model: string; provider: string }>("/api/health")
+      .then(setHealth)
+      .catch(() => setHealth(null));
+  }, []);
+  return [health, setHealth] as const;
 }
 
 function AppRoutes() {

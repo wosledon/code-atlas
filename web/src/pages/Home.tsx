@@ -17,8 +17,15 @@ import MenuBookIcon from "@mui/icons-material/MenuBook";
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
 import FolderOpenOutlinedIcon from "@mui/icons-material/FolderOpenOutlined";
 import UpdateOutlinedIcon from "@mui/icons-material/UpdateOutlined";
+import SyncIcon from "@mui/icons-material/Sync";
 import { Link as RouterLink, useNavigate } from "react-router-dom";
-import { api, type Project, type ProjectsResponse } from "../lib/api";
+import {
+  api,
+  triggerProjectUpdate,
+  type Project,
+  type ProjectsResponse,
+} from "../lib/api";
+import { useProject } from "../lib/projectContext";
 import { readerHref } from "../lib/routes";
 
 const STATUS_LABELS: Record<string, string> = {
@@ -125,9 +132,33 @@ function ProjectCard({
   project: Project;
   onOpen: (to: string) => void;
 }) {
+  const { setProjectId } = useProject();
   const entry = p.entryPath || p.highlights[0]?.path || "";
+  const [updating, setUpdating] = useState(false);
+  const [updateErr, setUpdateErr] = useState<string | null>(null);
+  const [liveStatus, setLiveStatus] = useState<string | null>(null);
   const openEntry = () => {
-    if (entry) onOpen(readerHref(entry));
+    setProjectId(p.id);
+    if (entry) onOpen(readerHref(entry, p.id));
+  };
+  const onUpdate = async () => {
+    setUpdating(true);
+    setUpdateErr(null);
+    setLiveStatus("running");
+    try {
+      await triggerProjectUpdate(p.id, { mode: "update" });
+      setProjectId(p.id);
+      onOpen(`/runs?project=${encodeURIComponent(p.id)}`);
+    } catch (e) {
+      const msg = String(e);
+      setLiveStatus(null);
+      setUpdateErr(
+        msg.includes("409") || msg.toLowerCase().includes("lock held")
+          ? `项目「${p.name || p.id}」已有更新在进行中`
+          : msg
+      );
+      setUpdating(false);
+    }
   };
 
   return (
@@ -219,9 +250,18 @@ function ProjectCard({
           <UpdateOutlinedIcon sx={{ fontSize: 15, color: "text.secondary" }} />
           <Typography variant="caption" color="text.secondary">
             更新于 {formatTime(p.updatedAt)}
-            {p.lastStatus ? ` · 最近运行：${STATUS_LABELS[p.lastStatus] || p.lastStatus}` : ""}
+            {liveStatus === "running"
+              ? " · 更新中…"
+              : p.lastStatus
+                ? ` · 最近运行：${STATUS_LABELS[p.lastStatus] || p.lastStatus}`
+                : ""}
           </Typography>
         </Stack>
+        {(updating || liveStatus === "running") && (
+          <Box sx={{ mt: 1.5 }}>
+            <LinearProgress sx={{ borderRadius: 1, height: 6 }} />
+          </Box>
+        )}
 
         {p.highlights.length > 0 && (
           <Box sx={{ mt: 2 }}>
@@ -235,7 +275,7 @@ function ProjectCard({
                   size="small"
                   clickable
                   component={RouterLink}
-                  to={readerHref(h.path)}
+                  to={readerHref(h.path, p.id)}
                   label={h.title}
                   title={h.path}
                   onClick={(e) => e.stopPropagation()}
@@ -252,7 +292,12 @@ function ProjectCard({
         )}
       </CardContent>
 
-      <CardActions sx={{ px: { xs: 2.25, md: 3 }, pb: { xs: 2, md: 2.5 }, pt: 0, gap: 1 }}>
+      {updateErr && (
+        <Alert severity="error" sx={{ mx: { xs: 2.25, md: 3 }, mb: 1 }}>
+          {updateErr}
+        </Alert>
+      )}
+      <CardActions sx={{ px: { xs: 2.25, md: 3 }, pb: { xs: 2, md: 2.5 }, pt: 0, gap: 1, flexWrap: "wrap" }}>
         <Button
           variant="contained"
           size="small"
@@ -269,10 +314,23 @@ function ProjectCard({
         <Button
           variant="outlined"
           size="small"
+          startIcon={<SyncIcon fontSize="small" />}
+          disabled={updating}
+          onClick={(e) => {
+            e.stopPropagation();
+            void onUpdate();
+          }}
+        >
+          {updating ? "更新中…" : "更新文档"}
+        </Button>
+        <Button
+          variant="outlined"
+          size="small"
           startIcon={<AutoAwesomeIcon fontSize="small" />}
           onClick={(e) => {
             e.stopPropagation();
-            onOpen("/chat");
+            setProjectId(p.id);
+            onOpen(`/chat?project=${encodeURIComponent(p.id)}`);
           }}
         >
           开始对话

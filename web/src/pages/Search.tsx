@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Box, Stack, Typography, alpha } from "@mui/material";
 import AutoAwesomeRoundedIcon from "@mui/icons-material/AutoAwesomeRounded";
 import { streamApi } from "../lib/api";
+import { useProject } from "../lib/projectContext";
 import { ChatComposer } from "../components/chat/ChatComposer";
 import { ChatMessage } from "../components/chat/ChatMessage";
 import type { ChatTurn } from "../components/chat/types";
@@ -17,6 +18,7 @@ export default function SearchPage() {
   const [chat, setChat] = useState<ChatTurn[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const { projectId } = useProject();
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLDivElement>(null);
 
@@ -59,7 +61,7 @@ export default function SearchPage() {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messages, top_k: 8 }),
+          body: JSON.stringify({ messages, top_k: 8, project: projectId || undefined }),
         },
         (ev) => {
           if (ev.type === "meta") {

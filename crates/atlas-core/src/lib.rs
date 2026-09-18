@@ -2,6 +2,7 @@
 //!
 //! 模块划分：
 //! - [`config`]：`atlas.toml` 配置结构与各分节默认值。
+//! - [`projects`]：项目注册表（启动仓库 + `atlas.projects.json` 登记的其他仓库）。
 //! - [`paths`]：仓库根解析、仓库标识与哈希工具。
 //! - [`scaffold`]：示例配置与 `AGENTS.md` 指针的生成。
 //! - [`pipeline`]：整条「扫描 → 规划 → 生成 → 落盘 → 建图」流水线。
@@ -12,6 +13,7 @@ pub mod git;
 pub mod lock;
 pub mod markdown;
 pub mod pipeline;
+pub mod projects;
 pub mod tools;
 
 mod config;
@@ -23,4 +25,8 @@ pub use config::{
     PrivacySection,
 };
 pub use paths::{repo_slug, resolve_repo_root, sha256_hex};
+pub use projects::{
+    read_project_marker, registry_path_for, write_project_marker, ProjectEntry, ProjectMarker,
+    ProjectRef, ProjectRegistry, DEFAULT_PROJECT_ID, PROJECT_MARKER_FILE, REGISTRY_FILE,
+};
 pub use scaffold::{ensure_agents_pointer, write_config_file, write_example_config};

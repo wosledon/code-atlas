@@ -131,6 +131,10 @@ impl RunSession {
         };
 
         let lock = RunLock::acquire(&data_dir, &run_id)?;
+        // Mark this data dir so a multi-project hub can discover the repo later.
+        if let Err(e) = crate::projects::write_project_marker(&data_dir, &ctx.repo_root) {
+            tracing::warn!("failed to write project marker: {e:#}");
+        }
         let store = Arc::new(Store::open(&ctx.cfg.db_path(&ctx.repo_root))?);
         // The lock is exclusive, so any leftover `running` row belongs to a dead process.
         if let Ok(n) = store.fail_stale_runs(0)

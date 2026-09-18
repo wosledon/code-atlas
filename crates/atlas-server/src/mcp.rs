@@ -5,6 +5,7 @@
 mod tools;
 
 use anyhow::Result;
+use atlas_core::projects::ProjectRegistry;
 use atlas_core::AtlasConfig;
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -18,10 +19,12 @@ const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub async fn serve_stdio(repo_root: PathBuf, cfg: AtlasConfig) -> Result<()> {
     let atlas_root = cfg.atlas_root(&repo_root);
+    let projects = ProjectRegistry::load_with_discovery(&repo_root);
     let ctx = McpCtx {
         repo_root,
         cfg,
         atlas_root,
+        projects,
     };
     let stdin = tokio::io::stdin();
     let mut reader = BufReader::new(stdin);

@@ -47,11 +47,6 @@ export type Entity = {
   status: string;
 };
 
-export type GraphData = {
-  nodes: { id: string; kind: string; name: string; canonical_key: string }[];
-  edges: { source: string; target: string; rel: string }[];
-};
-
 export type SearchHit = {
   kind: string;
   id: string;
@@ -78,10 +73,63 @@ export type Project = {
   updatedAt?: string | null;
   lastStatus?: string | null;
   entryPath: string;
+  isLaunch?: boolean;
   highlights: ProjectEntry[];
 };
 
 export type ProjectsResponse = { projects: Project[] };
+
+export type ChatRequest = {
+  messages: { role: string; content: string }[];
+  top_k?: number;
+  project?: string;
+};
+
+export type RunsResponse = {
+  projectId: string;
+  projectName?: string;
+  runs: Run[];
+};
+
+export type ProjectUpdateRequest = {
+  mode?: "update" | "init";
+  instruction?: string;
+};
+
+export type RegisterProjectRequest = {
+  root: string;
+  id?: string;
+  name?: string;
+};
+
+/** Project-scoped documentation update. */
+export async function triggerProjectUpdate(
+  projectId: string,
+  body?: ProjectUpdateRequest
+): Promise<unknown> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/update`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || { mode: "update" }),
+  });
+}
+
+export async function registerProject(body: RegisterProjectRequest): Promise<Project> {
+  return api("/api/projects", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export async function unregisterProject(projectId: string): Promise<void> {
+  await api(`/api/projects/${encodeURIComponent(projectId)}`, { method: "DELETE" });
+}
+
+export async function listRuns(projectId?: string): Promise<RunsResponse> {
+  const q = projectId ? `?project=${encodeURIComponent(projectId)}` : "";
+  return api<RunsResponse>(`/api/runs${q}`);
+}
 
 export type ChatSource = {
   kind: string;
@@ -119,10 +167,11 @@ export type ChatResponse = {
 };
 
 export type ChatStreamEvent =
-  | { type: "meta"; mode?: "llm" | "retrieval"; sources?: ChatSource[]; contexts?: ChatContext[] }
+  | { type: "meta"; project?: string; mode?: "llm" | "retrieval"; sources?: ChatSource[]; contexts?: ChatContext[] }
   | { type: "delta"; text: string }
   | {
       type: "done";
+      project?: string;
       mode?: "llm" | "retrieval";
       answer?: string;
       sources?: ChatSource[];
@@ -131,6 +180,22 @@ export type ChatStreamEvent =
       usage?: ChatUsage;
       error?: string;
     };
+
+export type TreeNode = {
+  id: string;
+  name: string;
+  path?: string | null;
+  children: TreeNode[];
+};
+
+export type TreeResponse = { project: string; tree: TreeNode };
+export type PagesResponse = { project: string; pages: string[] };
+export type PageResponse = { project?: string; path: string; content: string };
+export type GraphData = {
+  project?: string;
+  nodes: { id: string; kind: string; name: string; canonical_key: string }[];
+  edges: { source: string; target: string; rel: string }[];
+};
 
 /** POST and consume an SSE stream of `data: {json}` frames. */
 export async function streamApi(

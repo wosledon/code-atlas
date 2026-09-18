@@ -1,18 +1,28 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Alert,
   Box,
   Button,
   Card,
   CardContent,
+  Chip,
   Divider,
+  IconButton,
   MenuItem,
   Stack,
   TextField,
   Typography,
 } from "@mui/material";
 import SaveIcon from "@mui/icons-material/Save";
-import { api } from "../lib/api";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
+import AddIcon from "@mui/icons-material/Add";
+import {
+  api,
+  registerProject,
+  unregisterProject,
+  type Project,
+  type ProjectsResponse,
+} from "../lib/api";
 
 type Config = {
   provider: string;
@@ -29,6 +39,9 @@ type Config = {
 
 export default function SettingsPage() {
   const [cfg, setCfg] = useState<Config | null>(null);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [newRoot, setNewRoot] = useState("");
+  const [newName, setNewName] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -38,9 +51,16 @@ export default function SettingsPage() {
       .then(setCfg)
       .catch((e) => setErr(String(e)));
 
+  const loadProjects = useCallback(() => {
+    api<ProjectsResponse>("/api/projects")
+      .then((r) => setProjects(r.projects || []))
+      .catch((e) => setErr(String(e)));
+  }, []);
+
   useEffect(() => {
     load();
-  }, []);
+    loadProjects();
+  }, [loadProjects]);
 
   const save = async () => {
     if (!cfg) return;
@@ -69,16 +89,134 @@ export default function SettingsPage() {
     }
   };
 
+  const onRegister = async () => {
+    const root = newRoot.trim();
+    if (!root) return;
+    setBusy(true);
+    setErr(null);
+    setMsg(null);
+    try {
+      const p = await registerProject({
+        root,
+        name: newName.trim() || undefined,
+      });
+      setMsg(`已登记项目 ${p.id}`);
+      setNewRoot("");
+      setNewName("");
+      loadProjects();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onUnregister = async (id: string) => {
+    setBusy(true);
+    setErr(null);
+    setMsg(null);
+    try {
+      await unregisterProject(id);
+      setMsg(`已移除项目 ${id}`);
+      loadProjects();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <Stack spacing={2.5} maxWidth={820}>
       <Box className="atlas-fade">
         <Typography variant="h4">设置</Typography>
         <Typography color="text.secondary" sx={{ mt: 0.5 }}>
-          服务入口 <code>atlas web</code> · 密钥可写 <code>atlas.toml</code> 或环境变量（环境优先）
+          服务入口 <code>atlas web</code> · 文档更新按项目维度 · 密钥可写 <code>atlas.toml</code>{" "}
+          或环境变量（环境优先）
         </Typography>
       </Box>
       {err && <Alert severity="error">{err}</Alert>}
       {msg && <Alert severity="success">{msg}</Alert>}
+
+      <Card className="atlas-fade">
+        <CardContent sx={{ p: 3 }}>
+          <Typography variant="h6">项目注册表</Typography>
+          <Typography color="text.secondary" sx={{ mt: 0.5, mb: 2 }}>
+            当前启动仓库始终在列表中；其他仓库写入 <code>atlas.projects.json</code>
+            。项目卡片与 MCP <code>atlas_update</code> 都按项目 id 更新文档。
+          </Typography>
+          <Stack spacing={2}>
+            {projects.map((p) => (
+              <Stack
+                key={p.id}
+                direction={{ xs: "column", sm: "row" }}
+                spacing={1}
+                alignItems={{ sm: "center" }}
+                justifyContent="space-between"
+                sx={{
+                  border: "1px solid",
+                  borderColor: "divider",
+                  borderRadius: 2,
+                  px: 2,
+                  py: 1.25,
+                }}
+              >
+                <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+                  <Typography variant="subtitle2">{p.name || p.id}</Typography>
+                  <Chip size="small" label={p.id} variant="outlined" />
+                  {p.isLaunch && <Chip size="small" color="primary" label="启动项目" />}
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{ fontFamily: '"IBM Plex Mono", monospace' }}
+                  >
+                    {p.root}
+                  </Typography>
+                </Stack>
+                <IconButton
+                  size="small"
+                  color="warning"
+                  disabled={busy || !!p.isLaunch}
+                  title={p.isLaunch ? "启动项目不可移除" : "从注册表移除"}
+                  onClick={() => void onUnregister(p.id)}
+                >
+                  <DeleteOutlineIcon fontSize="small" />
+                </IconButton>
+              </Stack>
+            ))}
+            {projects.length === 0 && (
+              <Typography color="text.secondary">暂无项目（启动仓库加载后会自动出现）</Typography>
+            )}
+            <Divider />
+            <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5}>
+              <TextField
+                label="仓库绝对路径"
+                value={newRoot}
+                onChange={(e) => setNewRoot(e.target.value)}
+                placeholder="E:/repos/other-project"
+                fullWidth
+                size="small"
+              />
+              <TextField
+                label="显示名（可选）"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                sx={{ minWidth: { sm: 180 } }}
+                size="small"
+              />
+              <Button
+                variant="outlined"
+                startIcon={<AddIcon />}
+                disabled={busy || !newRoot.trim()}
+                onClick={() => void onRegister()}
+              >
+                登记项目
+              </Button>
+            </Stack>
+          </Stack>
+        </CardContent>
+      </Card>
+
       {!cfg && !err && <Typography color="text.secondary">加载中…</Typography>}
       {cfg && (
         <Card className="atlas-fade">

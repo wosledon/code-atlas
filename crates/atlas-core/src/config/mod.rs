@@ -92,6 +92,14 @@ impl AtlasConfig {
             dir.join("atlas.lock.heartbeat"),
             repo_root.join("AGENTS.md"),
             repo_root.join("atlas.toml.example"),
+            // Multi-project registry lives next to the launch repo; editing it
+            // must not look like a repository change on every update.
+            repo_root.join(crate::REGISTRY_FILE),
+            // Project identity marker written next to atlas data.
+            db.parent()
+                .unwrap_or(repo_root)
+                .to_path_buf()
+                .join(crate::PROJECT_MARKER_FILE),
         ];
         for suffix in ["-wal", "-shm"] {
             let mut name = db.file_name().unwrap_or_default().to_os_string();
@@ -126,9 +134,22 @@ mod tests {
         let cfg = AtlasConfig::default();
         let root = Path::new("/repo");
         let ignored = cfg.ignored_scan_files(root);
-        for expected in ["data/atlas.db", "data/atlas.db-wal", "data/atlas.lock", "AGENTS.md", "atlas.toml.example"] {
+        for expected in [
+            "data/atlas.db",
+            "data/atlas.db-wal",
+            "data/atlas.lock",
+            "AGENTS.md",
+            "atlas.toml.example",
+            crate::REGISTRY_FILE,
+            crate::PROJECT_MARKER_FILE,
+        ] {
             let needle = Path::new("/repo").join(expected);
-            assert!(ignored.contains(&needle), "{expected} missing from {ignored:?}");
+            // Marker sits next to the db (data/), not always at repo root.
+            let alt = Path::new("/repo/data").join(crate::PROJECT_MARKER_FILE);
+            assert!(
+                ignored.contains(&needle) || ignored.contains(&alt),
+                "{expected} missing from {ignored:?}"
+            );
         }
     }
 }

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use atlas_core::projects::ProjectRegistry;
 use atlas_core::AtlasConfig;
 use atlas_store::{SearchHit, Store};
 use axum::extract::{Path as AxPath, Query, State};
@@ -9,7 +10,7 @@ use axum::{Json, Router};
 use serde_json::json;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use tower_http::cors::CorsLayer;
 
 mod assets;
@@ -29,8 +30,10 @@ use crate::assets::health;
 use crate::chat::kb_chat;
 use crate::config::{get_config, post_config};
 use crate::graph::{graph_nodes, list_entities, neighborhood};
-use crate::projects::list_projects;
-use crate::runs::{list_runs, trigger_update};
+use crate::projects::{
+    list_projects, register_project, trigger_project_update, unregister_project,
+};
+use crate::runs::{list_runs, trigger_update_with_project};
 use crate::search::kb_search;
 use crate::tree::{doc_tree, list_pages, read_page};
 use crate::web_ui::{fallback_page, pick_ui_source, serve_embedded, UiSource};
@@ -39,10 +42,13 @@ pub use crate::web_ui::has_embedded_ui;
 
 #[derive(Clone)]
 pub struct AppState {
+    /// Launch repository (process default). Prefer resolving via `projects`.
     pub repo_root: PathBuf,
     pub cfg: Arc<AtlasConfig>,
     pub token: Arc<String>,
     pub atlas_root: PathBuf,
+    /// Project registry: launch repo + `atlas.projects.json` entries.
+    pub projects: Arc<RwLock<ProjectRegistry>>,
 }
 
 pub async fn serve(
@@ -58,17 +64,24 @@ pub async fn serve(
     } else {
         uuid::Uuid::new_v4().simple().to_string()
     };
+    let registry = ProjectRegistry::load_with_discovery(&repo_root);
     let state = AppState {
         repo_root,
         cfg: Arc::new(cfg),
         token: Arc::new(token.clone()),
         atlas_root,
+        projects: Arc::new(RwLock::new(registry)),
     };
 
     let mut app = Router::new()
         .route("/api/health", get(health))
         .route("/api/runs", get(list_runs))
-        .route("/api/projects", get(list_projects))
+        .route(
+            "/api/projects",
+            get(list_projects).post(register_project),
+        )
+        .route("/api/projects/{id}", axum::routing::delete(unregister_project))
+        .route("/api/projects/{id}/update", post(trigger_project_update))
         .route("/api/entities", get(list_entities))
         .route("/api/graph/nodes", get(graph_nodes))
         .route("/api/graph/nodes/{id}/neighborhood", get(neighborhood))
@@ -78,7 +91,7 @@ pub async fn serve(
         .route("/api/pages", get(list_pages))
         .route("/api/tree", get(doc_tree))
         .route("/api/config", get(get_config).post(post_config))
-        .route("/api/run/update", post(trigger_update))
+        .route("/api/run/update", post(trigger_update_with_project))
         .layer(cors_layer())
         .with_state(state);
 
@@ -123,6 +136,6 @@ fn cors_layer() -> CorsLayer {
                 o.starts_with(b"http://localhost:") || o.starts_with(b"http://127.0.0.1:")
             },
         ))
-        .allow_methods([Method::GET, Method::POST])
+        .allow_methods([Method::GET, Method::POST, Method::DELETE])
         .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
 }
