@@ -47,40 +47,53 @@ pub struct AppState {
     pub cfg: Arc<AtlasConfig>,
     pub token: Arc<String>,
     pub atlas_root: PathBuf,
-    /// Project registry: launch repo + `atlas.projects.json` entries.
+    /// Project registry cache (mtime hot-reload).
     pub projects: Arc<RwLock<ProjectRegistry>>,
 }
 
-pub async fn serve(
-    repo_root: PathBuf,
-    cfg: AtlasConfig,
-    port: u16,
-    insecure: bool,
-    web_dist: Option<PathBuf>,
-) -> Result<()> {
+/// Build app state. Registry path follows the atlas executable by default.
+pub fn build_state(repo_root: PathBuf, cfg: AtlasConfig, token: String) -> AppState {
     let atlas_root = cfg.atlas_root(&repo_root);
-    let token = if insecure {
-        "insecure".to_string()
-    } else {
-        uuid::Uuid::new_v4().simple().to_string()
-    };
     let registry = ProjectRegistry::load_with_discovery(&repo_root);
-    let state = AppState {
+    AppState {
         repo_root,
         cfg: Arc::new(cfg),
-        token: Arc::new(token.clone()),
+        token: Arc::new(token),
         atlas_root,
         projects: Arc::new(RwLock::new(registry)),
-    };
+    }
+}
 
-    let mut app = Router::new()
+/// Build state with an injected registry (tests / custom registry path).
+pub fn build_state_with_registry(
+    repo_root: PathBuf,
+    cfg: AtlasConfig,
+    token: String,
+    registry: ProjectRegistry,
+) -> AppState {
+    let atlas_root = cfg.atlas_root(&repo_root);
+    AppState {
+        repo_root,
+        cfg: Arc::new(cfg),
+        token: Arc::new(token),
+        atlas_root,
+        projects: Arc::new(RwLock::new(registry)),
+    }
+}
+
+/// API router without UI fallback (used by `serve` and integration tests).
+pub fn build_api_router(state: AppState) -> Router {
+    Router::new()
         .route("/api/health", get(health))
         .route("/api/runs", get(list_runs))
         .route(
             "/api/projects",
             get(list_projects).post(register_project),
         )
-        .route("/api/projects/{id}", axum::routing::delete(unregister_project))
+        .route(
+            "/api/projects/{id}",
+            axum::routing::delete(unregister_project),
+        )
         .route("/api/projects/{id}/update", post(trigger_project_update))
         .route("/api/entities", get(list_entities))
         .route("/api/graph/nodes", get(graph_nodes))
@@ -93,7 +106,24 @@ pub async fn serve(
         .route("/api/config", get(get_config).post(post_config))
         .route("/api/run/update", post(trigger_update_with_project))
         .layer(cors_layer())
-        .with_state(state);
+        .with_state(state)
+}
+
+pub async fn serve(
+    repo_root: PathBuf,
+    cfg: AtlasConfig,
+    port: u16,
+    insecure: bool,
+    web_dist: Option<PathBuf>,
+) -> Result<()> {
+    let token = if insecure {
+        "insecure".to_string()
+    } else {
+        uuid::Uuid::new_v4().simple().to_string()
+    };
+    let state = build_state(repo_root, cfg, token.clone());
+
+    let mut app = build_api_router(state);
 
     match pick_ui_source(web_dist.as_deref()) {
         UiSource::Disk(dist) => {

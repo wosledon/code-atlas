@@ -24,7 +24,7 @@ pub async fn serve_stdio(repo_root: PathBuf, cfg: AtlasConfig) -> Result<()> {
         repo_root,
         cfg,
         atlas_root,
-        projects,
+        projects: std::sync::Mutex::new(projects),
     };
     let stdin = tokio::io::stdin();
     let mut reader = BufReader::new(stdin);

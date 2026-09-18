@@ -11,6 +11,7 @@ use crate::AtlasConfig;
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant, SystemTime};
 
 pub const REGISTRY_FILE: &str = "atlas.projects.json";
 pub const DEFAULT_PROJECT_ID: &str = "default";
@@ -18,6 +19,12 @@ pub const DEFAULT_PROJECT_ID: &str = "default";
 pub const PROJECT_MARKER_FILE: &str = ".atlas-project.json";
 /// Default centralized data root next to the atlas executable.
 pub const EXE_DATA_DIR_NAME: &str = ".atlas-data";
+/// How long resolve/list may skip a re-scan of external markers.
+const DISCOVER_TTL: Duration = Duration::from_secs(15);
+
+fn file_mtime(path: &Path) -> Option<SystemTime> {
+    std::fs::metadata(path).ok().and_then(|m| m.modified().ok())
+}
 
 /// One registered (non-launch) project on disk.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,12 +64,17 @@ struct RegistryFile {
 }
 
 /// Launch project + extras from the registry file.
+///
+/// The file on disk is the source of truth; `refresh_if_changed` reloads it
+/// only when mtime changes (hot reload without re-reading every request).
 #[derive(Debug, Clone)]
 pub struct ProjectRegistry {
     launch_root: PathBuf,
     launch_id: String,
     registry_path: PathBuf,
     entries: Vec<ProjectEntry>,
+    registry_mtime: Option<SystemTime>,
+    last_discover: Option<Instant>,
 }
 
 impl ProjectRegistry {
@@ -76,11 +88,14 @@ impl ProjectRegistry {
     /// Load with an explicit registry file location (tests / overrides).
     pub fn load_with_registry_path(launch_root: &Path, registry_path: PathBuf) -> Self {
         let entries = read_entries(&registry_path);
+        let registry_mtime = file_mtime(&registry_path);
         Self {
             launch_root: launch_root.to_path_buf(),
             launch_id: repo_slug(launch_root),
             registry_path,
             entries,
+            registry_mtime,
+            last_discover: None,
         }
     }
 
@@ -88,7 +103,30 @@ impl ProjectRegistry {
     pub fn load_with_discovery(launch_root: &Path) -> Self {
         let mut reg = Self::load(launch_root);
         reg.discover_projects();
+        reg.last_discover = Some(Instant::now());
         reg
+    }
+
+    /// Reload `entries` when the registry file mtime changed. Returns true if reloaded.
+    pub fn refresh_if_changed(&mut self) -> bool {
+        let mtime = file_mtime(&self.registry_path);
+        if mtime == self.registry_mtime {
+            return false;
+        }
+        self.entries = read_entries(&self.registry_path);
+        self.registry_mtime = mtime;
+        true
+    }
+
+    /// Discover markers, at most once per `DISCOVER_TTL`.
+    pub fn discover_throttled(&mut self) -> Vec<ProjectEntry> {
+        if let Some(t) = self.last_discover
+            && t.elapsed() < DISCOVER_TTL
+        {
+            return Vec::new();
+        }
+        self.last_discover = Some(Instant::now());
+        self.discover_projects()
     }
 
     /// Scan `external_root` (and env override) for `.atlas-project.json` markers
@@ -126,6 +164,22 @@ impl ProjectRegistry {
             tracing::warn!("failed to persist discovered projects: {e:#}");
         }
         found
+    }
+
+    fn save(&mut self) -> Result<()> {
+        let file = RegistryFile {
+            projects: self.entries.clone(),
+        };
+        let text = serde_json::to_string_pretty(&file)?;
+        if let Some(parent) = self.registry_path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+        std::fs::write(&self.registry_path, format!("{text}\n"))?;
+        self.registry_mtime = file_mtime(&self.registry_path);
+        self.last_discover = Some(Instant::now());
+        Ok(())
     }
 
     fn external_roots(&self) -> Vec<PathBuf> {
@@ -296,20 +350,6 @@ impl ProjectRegistry {
             atlas_root,
             is_launch: false,
         })
-    }
-
-    fn save(&self) -> Result<()> {
-        let file = RegistryFile {
-            projects: self.entries.clone(),
-        };
-        let text = serde_json::to_string_pretty(&file)?;
-        if let Some(parent) = self.registry_path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent)?;
-            }
-        }
-        std::fs::write(&self.registry_path, format!("{text}\n"))?;
-        Ok(())
     }
 }
 
@@ -535,5 +575,32 @@ mod tests {
             assert_eq!(path, launch.join(REGISTRY_FILE));
         }
         fs::remove_dir_all(&launch).ok();
+    }
+
+    #[test]
+    fn refresh_if_changed_skips_same_mtime_and_picks_up_writes() {
+        let launch = temp_dir("mtime");
+        let other = temp_dir("mtime-side");
+        let mut reg = test_registry(&launch);
+        assert!(!reg.refresh_if_changed(), "first refresh should be a no-op");
+
+        let added = reg.register(&other, None, None).unwrap();
+        // After save(), mtime is updated — still no reload needed from this handle.
+        assert!(!reg.refresh_if_changed());
+
+        // External write: simulate another process bumping the file.
+        let path = reg.registry_path().to_path_buf();
+        let mut text = fs::read_to_string(&path).unwrap();
+        text = text.replace("mtime-side", "mtime-side2");
+        // Ensure mtime changes (NTFS resolution can be coarse).
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(&path, &text).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+
+        assert!(reg.refresh_if_changed(), "external write should reload");
+        // Old id still resolves if root still exists; content was rewritten in place.
+        let _ = added;
+        fs::remove_dir_all(&launch).ok();
+        fs::remove_dir_all(&other).ok();
     }
 }

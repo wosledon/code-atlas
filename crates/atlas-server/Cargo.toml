@@ -25,6 +25,10 @@ rust-embed.workspace = true
 mime_guess.workspace = true
 flate2 = "1"
 
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+
 [build-dependencies]
 flate2 = "1"
 

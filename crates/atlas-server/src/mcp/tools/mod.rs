@@ -13,6 +13,7 @@ use anyhow::Result;
 use atlas_core::projects::{ProjectRef, ProjectRegistry};
 use atlas_core::AtlasConfig;
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 pub(crate) use args::{bool_arg, int_arg, str_arg};
 pub(crate) use catalog::tool_defs;
@@ -28,18 +29,23 @@ pub(crate) struct McpCtx {
     pub(crate) cfg: AtlasConfig,
     #[allow(dead_code)]
     pub(crate) atlas_root: PathBuf,
-    /// Cached at process start; resolve/list hot-reload from disk via `repo_root`.
-    #[allow(dead_code)]
-    pub(crate) projects: ProjectRegistry,
+    /// Cached registry; hot-reloaded via mtime on each resolve.
+    pub(crate) projects: Mutex<ProjectRegistry>,
 }
 
 pub(crate) fn resolve_ctx_project(ctx: &McpCtx, project: Option<&str>) -> Result<ProjectRef> {
-    // Hot-reload registry from disk so `atlas project add` applies without
-    // restarting the MCP process.
-    let reg = ProjectRegistry::load_with_discovery(&ctx.repo_root);
+    let mut reg = ctx.projects.lock().unwrap_or_else(|e| e.into_inner());
+    reg.refresh_if_changed();
+    reg.discover_throttled();
     reg.resolve(project)
 }
 
 pub(crate) fn list_registry(ctx: &McpCtx) -> ProjectRegistry {
-    ProjectRegistry::load_with_discovery(&ctx.repo_root)
+    let mut reg = ctx.projects.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    reg.refresh_if_changed();
+    reg.discover_projects();
+    if let Ok(mut guard) = ctx.projects.lock() {
+        *guard = reg.clone();
+    }
+    reg
 }
