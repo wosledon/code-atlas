@@ -24,25 +24,41 @@ crates/x.rs
 </tool_call>
 ";
 
+/// 同一个协议方言，换成另一个文件——用来模拟「预算用尽后还在读」。
+const DIALECT_LATE: &str = "\
+还差一个文件。
+
+<tool_call>
+<function=read_file>
+<parameter=path>
+crates/y.rs
+</parameter>
+</function>
+</tool_call>
+";
+
 const FINAL: &str = "## 职责\n\n`crates/x.rs:121` 定义了入口函数，供 CLI 调用。\n";
 
 /// Fake OpenAI-compatible endpoint: records every request body and answers the
-/// first one with a text-dialect tool request, the rest with page prose.
-fn fake_server(seen: Arc<Mutex<Vec<String>>>) -> String {
+/// n-th request with the n-th reply (the last one repeats).
+fn fake_server(replies: Vec<String>, seen: Arc<Mutex<Vec<String>>>) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake llm");
     let addr = listener.local_addr().expect("addr");
     std::thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { break };
             let request = read_request(&mut stream);
-            let first = {
+            let index = {
                 let mut seen = seen.lock().expect("seen");
-                let first = seen.is_empty();
+                let index = seen.len();
                 seen.push(request);
-                first
+                index
             };
-            let reply = sse_response(if first { DIALECT } else { FINAL });
-            let _ = stream.write_all(&reply);
+            let reply = replies
+                .get(index)
+                .or_else(|| replies.last())
+                .expect("at least one reply");
+            let _ = stream.write_all(&sse_response(reply));
             let _ = stream.flush();
         }
     });
@@ -102,32 +118,42 @@ fn read_file_spec() -> ToolSpec {
     }
 }
 
-#[tokio::test]
-async fn text_dialect_tool_request_runs_as_a_real_round() {
-    let seen = Arc::new(Mutex::new(Vec::new()));
-    let base_url = fake_server(seen.clone());
-    let cfg = LlmConfig {
+fn client(base_url: String) -> LlmClient {
+    LlmClient::from_env(LlmConfig {
         provider: "openai-compatible".into(),
         model: "fake-model".into(),
         api_key: "test-key".into(),
         base_url,
         ..Default::default()
-    };
-    let llm = LlmClient::from_env(cfg).expect("client");
+    })
+    .expect("client")
+}
 
-    let ran = Arc::new(Mutex::new(Vec::new()));
+type Ran = Arc<Mutex<Vec<String>>>;
+type Exec = Box<dyn Fn(&str, &str) -> anyhow::Result<String>>;
+
+/// 记录每次执行，返回一个固定的「工具结果」。
+fn recorder() -> (Ran, Exec) {
+    let ran: Ran = Arc::new(Mutex::new(Vec::new()));
     let recorded = ran.clone();
+    let exec: Exec = Box::new(move |name: &str, args: &str| {
+        recorded.lock().expect("ran").push(format!("{name} {args}"));
+        Ok("pub fn main() {}\n".to_string())
+    });
+    (ran, exec)
+}
+
+#[tokio::test]
+async fn text_dialect_tool_request_runs_as_a_real_round() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let llm = client(fake_server(
+        vec![DIALECT.to_string(), FINAL.to_string()],
+        seen.clone(),
+    ));
+    let (ran, exec) = recorder();
+
     let resp = llm
-        .chat_with_tools(
-            "system",
-            "user",
-            &[read_file_spec()],
-            2,
-            move |name, args| {
-                recorded.lock().expect("ran").push(format!("{name} {args}"));
-                Ok("pub fn main() {}\n".into())
-            },
-        )
+        .chat_with_tools("system", "user", &[read_file_spec()], 2, exec)
         .await
         .expect("chat_with_tools");
 
@@ -153,19 +179,61 @@ async fn text_dialect_tool_request_runs_as_a_real_round() {
     );
 }
 
+/// 预算用尽后模型还在要文件（线上表现为「模板回退（输出过短）」）：
+/// 先把工具给出去，再要正文，页面才写得出来。
+#[tokio::test]
+async fn tool_request_after_the_budget_still_gets_its_file() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let llm = client(fake_server(
+        vec![
+            DIALECT.to_string(),
+            DIALECT_LATE.to_string(),
+            FINAL.to_string(),
+        ],
+        seen.clone(),
+    ));
+    let (ran, exec) = recorder();
+
+    let resp = llm
+        .chat_with_tools("system", "user", &[read_file_spec()], 1, exec)
+        .await
+        .expect("chat_with_tools");
+
+    let ran = ran.lock().expect("ran").clone();
+    assert_eq!(ran.len(), 2, "both requested files must be read: {ran:?}");
+    assert!(ran[1].contains("crates/y.rs"), "{ran:?}");
+    assert!(resp.text.contains("定义"), "{}", resp.text);
+    assert!(!resp.text.contains("<tool_call"), "{}", resp.text);
+
+    let requests = seen.lock().expect("seen");
+    assert_eq!(requests.len(), 3, "read, read again, then write");
+}
+
+/// 一直要文件也有尽头：超出补读上限就返回现有正文，不会无限转下去。
+#[tokio::test]
+async fn endless_tool_requests_stop_at_the_cap() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let llm = client(fake_server(vec![DIALECT.to_string()], seen.clone()));
+    let (ran, exec) = recorder();
+
+    let resp = llm
+        .chat_with_tools("system", "user", &[read_file_spec()], 1, exec)
+        .await
+        .expect("chat_with_tools");
+
+    assert_eq!(ran.lock().expect("ran").len(), 3, "1 轮 + 2 次补读");
+    assert_eq!(seen.lock().expect("seen").len(), 4);
+    assert!(!resp.text.contains("<tool_call"), "{}", resp.text);
+    assert!(!resp.text.contains("parameter"), "{}", resp.text);
+    // 走不到正文时也别把已经写出来的那段丢掉（空正文会被上层换成模板）。
+    assert!(resp.text.contains("我来确认一下"), "{}", resp.text);
+}
+
 /// 没有工具可给的普通问答里，转录不能被当成答案交给调用方。
 #[tokio::test]
 async fn plain_chat_drops_the_transcript() {
     let seen = Arc::new(Mutex::new(Vec::new()));
-    let base_url = fake_server(seen);
-    let cfg = LlmConfig {
-        provider: "openai-compatible".into(),
-        model: "fake-model".into(),
-        api_key: "test-key".into(),
-        base_url,
-        ..Default::default()
-    };
-    let llm = LlmClient::from_env(cfg).expect("client");
+    let llm = client(fake_server(vec![DIALECT.to_string()], seen));
     let resp = llm.chat("system", "user").await.expect("chat");
     assert!(!resp.text.contains("<tool_call"), "{}", resp.text);
     assert!(!resp.text.contains("parameter"), "{}", resp.text);

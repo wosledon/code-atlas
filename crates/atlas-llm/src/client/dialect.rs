@@ -98,21 +98,19 @@ pub fn strip(text: &str) -> String {
 /// them.
 ///
 /// Structured `tool_calls[]` always win. Without them the answer is read as text
-/// dialect — but only while tools are still on offer: a final, tool-free round
-/// has nothing left to run, so its transcript is stripped and the (possibly
-/// empty) prose returned.
+/// dialect and parsed the same way — whether the caller is still offering tools
+/// is its own decision, not the parser's: a model that asks for a file after the
+/// tool budget is spent asked for it either way, and dropping the request is
+/// what leaves a page without text. `specs` only types the arguments.
 pub(crate) fn resolve(
     text: &str,
     calls: Vec<ToolCall>,
-    offered: &[ToolSpec],
+    specs: &[ToolSpec],
 ) -> (Vec<ToolCall>, String) {
     if !calls.is_empty() {
         return (calls, text.to_string());
     }
-    if offered.is_empty() {
-        return (Vec::new(), strip(text));
-    }
-    match extract(text, offered) {
+    match extract(text, specs) {
         Some(d) => (d.calls, d.prose),
         None => (Vec::new(), strip(text)),
     }
@@ -296,14 +294,23 @@ mod tests {
         assert_eq!(text, "正文");
     }
 
-    /// 最后一轮没有工具可给：转录可以摘掉，但不能被当成一次工具回合。
+    /// 工具预算用尽、schemas 不再随请求下发时，模型照样会这样要文件：
+    /// 解析不看「是否提供工具」，执行与否由调用方按自己的预算决定。
     #[test]
-    fn final_round_strips_instead_of_running() {
+    fn parses_calls_the_caller_still_has_to_decide_about() {
         let text = "前言\n<tool_call>\n<function=read_file>\n<parameter=path>a.rs\n</parameter>\n</function>\n</tool_call>\n";
-        let (calls, prose) = resolve(text, Vec::new(), &[]);
-        assert!(calls.is_empty());
+        let (calls, prose) = resolve(text, Vec::new(), &specs());
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "read_file");
         assert_eq!(prose, "前言");
-        assert!(!prose.contains("read_file"));
+    }
+
+    /// 没有可执行的调用时，转录必须摘干净，不能当正文交出去。
+    #[test]
+    fn strip_only_result_keeps_no_transcript() {
+        let text = "前言\n<tool_call>\n<function=read_file>\n<parameter=path>a.rs\n</parameter>\n</function>\n</tool_call>\n";
+        let stripped = strip(text);
+        assert_eq!(stripped, "前言");
     }
 
     #[test]
@@ -336,9 +343,13 @@ mod tests {
     /// 没有闭合标记的调用不还原：猜错的参数会被真的执行。
     #[test]
     fn ignores_unclosed_functions() {
-        let text = "<function=read_file><parameter=path>a.rs</parameter>";
-        let (calls, _) = resolve(text, Vec::new(), &specs());
+        let text = "正文开头。\n\n<function=read_file>\n<parameter=path>\na.rs\n</parameter>\n";
+        let (calls, prose) = resolve(text, Vec::new(), &specs());
         assert!(calls.is_empty());
+        assert!(prose.contains("正文开头。"), "{prose}");
+        assert!(!prose.contains("<function"), "{prose}");
+        // 未闭合块留下的参数行继续可见，由上层门禁判定「含工具调用残片」。
+        assert!(prose.contains("<parameter=path>"), "{prose}");
     }
 
     /// Anthropic / Kimi 的 `antml:` 变体不还原成调用，但整块要摘干净。

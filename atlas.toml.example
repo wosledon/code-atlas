@@ -16,6 +16,9 @@ retries = 3
 # How many read_file/list_files/grep rounds a page generation may use (0 disables tools).
 # Each round is a full model call that re-sends the conversation: raising this
 # multiplies both wall-clock time and prompt tokens per page.
+# A model that keeps asking for files instead of writing still gets up to 2 read
+# rounds past this budget (logged as 「补读」); raise the value if that warning
+# shows up on pages whose source it clearly had not read.
 max_tool_rounds = 2
 # Re-check each page against the depth bar and let the model expand it once when it is too thin.
 depth_pass = true
