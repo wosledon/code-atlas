@@ -1,8 +1,8 @@
 //! Symbol-definition hunt and git history tools.
 
-use super::glob::{clip, is_skipped_dir, is_text_extension, shell_glob_match};
 use super::RepoTools;
-use anyhow::{anyhow, Result};
+use super::glob::{clip, is_skipped_dir, is_text_extension, shell_glob_match};
+use anyhow::{Result, anyhow};
 use walkdir::WalkDir;
 
 impl RepoTools {
@@ -59,7 +59,12 @@ impl RepoTools {
 
     pub(crate) fn git_log(&self, path: Option<&str>, limit: usize) -> Result<String> {
         let mut cmd = std::process::Command::new("git");
-        cmd.args(["--no-pager", "log", "--oneline", &format!("--max-count={limit}")]);
+        cmd.args([
+            "--no-pager",
+            "log",
+            "--oneline",
+            &format!("--max-count={limit}"),
+        ]);
         if let Some(p) = path.filter(|p| !p.trim().is_empty()) {
             let full = self.resolve(p)?;
             cmd.arg("--");
@@ -112,7 +117,7 @@ fn line_defines(line: &str, name: &str) -> bool {
         format!("interface {name}"),
         format!("export interface {name}"),
     ];
-    patterns
-        .iter()
-        .any(|p| t.starts_with(p.as_str()) || t.contains(&format!("{p}(")) || t.contains(&format!("{p} ")))
+    patterns.iter().any(|p| {
+        t.starts_with(p.as_str()) || t.contains(&format!("{p}(")) || t.contains(&format!("{p} "))
+    })
 }

@@ -369,6 +369,55 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// 缩进外提后行号必须仍然精确——外提头部不是源码行，给它行号会让下面每行偏 1，
+    /// 而模型正是按 `path:line` 引用的。
+    #[test]
+    fn hoisted_windows_keep_their_line_numbers() {
+        let dir = std::env::temp_dir().join(format!("atlas-tools-hoist-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        let rs: String = (1..=20)
+            .map(|i| format!("        let v{i} = {i};\n"))
+            .collect();
+        std::fs::write(dir.join("src/deep.rs"), &rs).unwrap();
+        let py: String = (1..=20)
+            .map(|i| format!("        value_{i} = {i}\n"))
+            .collect();
+        std::fs::write(dir.join("src/deep.py"), &py).unwrap();
+        let t = tools(&dir);
+
+        // Rust：外提生效（记号 `// begin: 8 spaces omitted per line`），且第 N 行就是第 N 行。
+        let out = t
+            .call(
+                "read_file",
+                "{\"path\":\"src/deep.rs\",\"start_line\":1,\"end_line\":20}",
+            )
+            .unwrap();
+        assert!(out.contains("// begin: 8 spaces omitted"), "应外提：{out}");
+        assert!(out.contains(compress::BLOCK_END), "块要有结束记号：{out}");
+        let numbered: Vec<(usize, &str)> = out
+            .lines()
+            .filter_map(|l| l.split_once("| "))
+            .filter_map(|(no, body)| no.trim().parse::<usize>().ok().map(|n| (n, body)))
+            .collect();
+        assert_eq!(numbered.len(), 20, "20 行源码都要有行号：{out}");
+        for (n, body) in &numbered {
+            assert_eq!(*body, format!("let v{n} = {n};"), "第 {n} 行错位：{out}");
+        }
+
+        // Python：同一文本不外提，行号与内容同样精确。
+        let out = t
+            .call(
+                "read_file",
+                "{\"path\":\"src/deep.py\",\"start_line\":1,\"end_line\":20}",
+            )
+            .unwrap();
+        assert!(!out.contains("spaces omitted"), "Python 不该外提：{out}");
+        assert!(out.contains(" value_1 = 1"), "{out}");
+        assert!(out.contains(" value_20 = 20"), "{out}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// 同一文件被多页读到时不重复读盘：本次运行内返回第一次的快照。
     #[test]
     fn identical_calls_hit_the_snapshot_cache() {

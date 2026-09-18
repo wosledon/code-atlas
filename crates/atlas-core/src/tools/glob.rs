@@ -5,11 +5,21 @@ use std::path::Path;
 pub(crate) const MAX_LINE_CHARS: usize = 400;
 
 pub(crate) fn is_skipped_dir(path: &Path) -> bool {
-    let name = path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    let name = path
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
     path.is_dir()
         && matches!(
             name.as_str(),
-            ".git" | "node_modules" | "target" | "dist" | ".venv" | "venv" | "__pycache__" | ".atlas-data"
+            ".git"
+                | "node_modules"
+                | "target"
+                | "dist"
+                | ".venv"
+                | "venv"
+                | "__pycache__"
+                | ".atlas-data"
         )
 }
 
@@ -17,10 +27,48 @@ pub(crate) fn is_text_extension(rel: &str) -> bool {
     let ext = rel.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
     matches!(
         ext.as_str(),
-        "rs" | "toml" | "json" | "md" | "txt" | "ts" | "tsx" | "js" | "jsx" | "py" | "go" | "java"
-            | "c" | "h" | "cpp" | "hpp" | "cs" | "rb" | "php" | "sh" | "ps1" | "bat" | "yml" | "yaml"
-            | "sql" | "css" | "scss" | "html" | "vue" | "kt" | "swift" | "gradle" | "mod" | "sum"
-            | "cfg" | "ini" | "xml" | "proto" | "mjs" | "cjs" | "lock" | "env" | "gitignore"
+        "rs" | "toml"
+            | "json"
+            | "md"
+            | "txt"
+            | "ts"
+            | "tsx"
+            | "js"
+            | "jsx"
+            | "py"
+            | "go"
+            | "java"
+            | "c"
+            | "h"
+            | "cpp"
+            | "hpp"
+            | "cs"
+            | "rb"
+            | "php"
+            | "sh"
+            | "ps1"
+            | "bat"
+            | "yml"
+            | "yaml"
+            | "sql"
+            | "css"
+            | "scss"
+            | "html"
+            | "vue"
+            | "kt"
+            | "swift"
+            | "gradle"
+            | "mod"
+            | "sum"
+            | "cfg"
+            | "ini"
+            | "xml"
+            | "proto"
+            | "mjs"
+            | "cjs"
+            | "lock"
+            | "env"
+            | "gitignore"
     )
 }
 
