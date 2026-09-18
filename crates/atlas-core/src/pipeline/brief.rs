@@ -8,14 +8,17 @@
 use super::*;
 
 /// 所有页面共用的深度门槛，原样进入提示词。
+/// 指标对齐 wiki 里已生成的优质页（Business 入口表、Module 的 symbol:line API 表、
+/// Onboarding 的真实命令表），并禁止工具残片与空洞表格。
 const DEPTH_BAR: &str = r#"Hard quality bar (a page that misses any of these is a failed page, not a short one):
 - Substance: >= 1200 characters, >= 4 `##` sections, every section carries real content (no one-line sections).
-- Traceability: >= 6 backticked repository-relative paths or real symbol names; prefer `path:line` anchors you actually read with the tools.
-- At least one markdown table (files, symbols, commands, config keys, interfaces…).
-- Diagrams must PARSE. If you write a mermaid flowchart: node ids are plain ASCII identifiers (`[A-Za-z0-9_]`), never a mermaid keyword — `graph`, `end`, `subgraph`, `class`, `classDef`, `style`, `click`, `linkStyle`, `direction`, `default` — because those are lexed as syntax; wrap EVERY node and edge label in double quotes, e.g. `core["crates/atlas-core<br/>run_init_or_update"]`, `api -->|"POST /api/ask"| kb`, `cli -->|"serve()"| srv`; use `<br/>` (never a literal newline) for line breaks. Unquoted labels break the parser as soon as they start with `/` or contain `(`, `)` or `"`. Always quote; an unquoted label is a bug even when the reader can repair it.
+- Traceability: >= 8 backticked repository-relative paths or real symbol names; prefer `path:line` anchors you actually read with the tools. Never invent line numbers.
+- Tables: at least one markdown table with real anchors; prefer >= 5 data rows when the repo has that many items. Empty cells or "见代码" are failures.
+- Diagrams must PARSE. If you write a mermaid flowchart/sequence: node ids are plain ASCII identifiers (`[A-Za-z0-9_]`), never a mermaid keyword — `graph`, `end`, `subgraph`, `class`, `classDef`, `style`, `click`, `linkStyle`, `direction`, `default` — because those are lexed as syntax; wrap EVERY node and edge label in double quotes, e.g. `core["crates/atlas-core<br/>run_init_or_update"]`, `api -->|"POST /api/ask"| kb`; use `<br/>` (never a literal newline) for line breaks. Always quote; an unquoted label is a bug.
+- Type-specific must-haves: Module pages include 职责 vs 非职责, public API table, dependency edges, 易错点, 上手要点. Business pages include 领域术语表 and 业务规则表 with file:function anchors. Workflow pages include stage I/O table and failure paths.
 - Explain WHY, not only WHAT: intent, invariants, trade-offs, pitfalls, and what breaks if someone changes it.
-- No placeholders ("需人工补全", "待补充", "TBD", "略"): if something cannot be determined, say what you inspected and what stays unknown.
-- End factual pages with `## Claims` (short verifiable bullets).
+- No placeholders ("需人工补全", "待补充", "TBD", "略", "见代码"): if something cannot be determined, say what you inspected and what stays unknown.
+- End factual pages with `## Claims`: 5–8 short verifiable bullets, preferably each with a code anchor.
 - Generic advice that would fit any repository is worthless: every paragraph must mention something that is true only for THIS repository."#;
 
 const PLACEHOLDERS: &[&str] = &[
@@ -28,6 +31,9 @@ const PLACEHOLDERS: &[&str] = &[
     "省略若干",
     "（略）",
     "TBD",
+    "见代码",
+    "（待确认）",
+    "待确认",
 ];
 
 /// 章节大纲：按页面类型要求必须出现的小节。每行一节，写成编号清单而不是
@@ -158,16 +164,10 @@ pub(crate) fn depth_gaps(body: &str, page: &PlannedPage) -> Vec<String> {
     if h2 < min_h2 {
         gaps.push(format!("只有 {h2} 个二级标题，需要 ≥ {min_h2} 个且每节有实质内容"));
     }
-    if count_lines_starting_with(body, '|') < 3 {
-        gaps.push("没有 markdown 表格：文件/符号/命令/接口类信息必须用表格".into());
-    }
-    if wants_diagram(&page.page_type) && !body.contains("```mermaid") {
-        gaps.push("缺少 mermaid 图：结构、流程或数据关系需要画出来".into());
-    }
     let cites = code_citations(body);
-    if cites < 6 {
+    if cites < 8 {
         gaps.push(format!(
-            "只引用了 {cites} 处真实代码路径/符号（反引号标注），需要 ≥ 6 处，尽量带 `path:line`"
+            "只引用了 {cites} 处真实代码路径/符号（反引号标注），需要 ≥ 8 处，尽量带 `path:line`（未读到的文件不要编行号）"
         ));
     }
     if let Some(ph) = PLACEHOLDERS.iter().find(|p| body.contains(**p)) {
@@ -178,11 +178,51 @@ pub(crate) fn depth_gaps(body: &str, page: &PlannedPage) -> Vec<String> {
             "正文含工具调用残片或生成标记「{marker}」：必须删除 transcript，只保留 wiki 正文"
         ));
     }
+    // Type-specific bars aligned with the best existing wiki pages.
+    match page.page_type.as_str() {
+        "Module" => {
+            if !body.contains("职责") || !body.contains("非职责") {
+                gaps.push("Module 页必须同时包含「职责」与「非职责」".into());
+            }
+            if !body.contains("上手要点") && !body.contains("先读") {
+                gaps.push("Module 页必须有上手要点（先读哪些文件、第一个改动建议）".into());
+            }
+        }
+        "Business" => {
+            if !body.contains("术语") && !body.contains("Glossary") {
+                gaps.push("Business 页需要领域术语表（术语 → 含义 → 代码映射）".into());
+            }
+        }
+        "Workflow" => {
+            if !body.contains("```mermaid") {
+                gaps.push("Workflow 页必须包含分阶段 mermaid 图".into());
+            }
+        }
+        _ => {}
+    }
+    if count_lines_starting_with(body, '|') < 3 {
+        gaps.push("没有足够的 markdown 表格：文件/符号/命令/接口类信息必须用带锚点的表格".into());
+    }
+    if wants_diagram(&page.page_type) && !body.contains("```mermaid") {
+        gaps.push("缺少 mermaid 图：结构、流程或数据关系需要画出来".into());
+    }
     if !body
         .lines()
         .any(|l| l.trim_start().starts_with('#') && l.contains("Claims"))
     {
-        gaps.push("结尾缺少 `## Claims` 事实清单".into());
+        gaps.push("结尾缺少 `## Claims` 事实清单（5–8 条可核验 bullet）".into());
+    } else {
+        let claims_bullets = body
+            .lines()
+            .skip_while(|l| !(l.trim_start().starts_with('#') && l.contains("Claims")))
+            .skip(1)
+            .filter(|l| l.trim_start().starts_with("- "))
+            .count();
+        if claims_bullets < 5 {
+            gaps.push(format!(
+                "Claims 只有 {claims_bullets} 条，需要 5–8 条可核验事实"
+            ));
+        }
     }
     gaps
 }
@@ -280,14 +320,23 @@ mod tests {
         let filler = "这一节解释了模块边界与依赖方向，为什么这样分层，以及改动后会破坏什么不变量。";
         let mut body = String::from("## 分层与模块边界\n");
         body.push_str(filler);
-        body.push_str("\n\n## 模块清单\n| 模块 | 路径 | 职责 | 入口 |\n| --- | --- | --- | --- |\n| core | `crates/atlas-core` | 管线 | `run_init_or_update` |\n\n");
-        body.push_str("## 依赖关系\n```mermaid\ngraph LR\n  cli --> core\n```\n");
+        body.push_str("\n\n## 模块清单\n| 模块 | 路径 | 职责 | 入口 |\n| --- | --- | --- | --- |\n| core | `crates/atlas-core` | 管线 | `run_init_or_update` |\n| server | `crates/atlas-server` | API | `serve` |\n| cli | `crates/atlas-cli` | 入口 | `main` |\n| store | `crates/atlas-store` | SQLite | `Store::open` |\n| kb | `crates/atlas-kb` | 检索 | `store_chunks` |\n\n");
+        body.push_str("## 依赖关系\n```mermaid\ngraph LR\n  cli[\"crates/atlas-cli\"] --> core[\"crates/atlas-core\"]\n```\n");
         body.push_str("## 扩展点与约束\n");
         for _ in 0..24 {
             body.push_str(filler);
         }
-        body.push_str("\n\n引用 `crates/atlas-core/src/pipeline/run.rs:42`、`atlas-server/src/lib.rs`、`web/src/App.tsx`、`atlas.toml`、`scan_repo()`、`RepoScan`、`Store::open` 与 `build_evidence`。\n");
-        body.push_str("\n## Claims\n- 分层为 crates 边界。\n");
+        body.push_str(
+            "\n\n引用 `crates/atlas-core/src/pipeline/run.rs:42`、`crates/atlas-core/src/config/mod.rs:15`、\
+             `crates/atlas-server/src/lib.rs`、`crates/atlas-cli/src/main.rs`、`web/src/App.tsx`、\
+             `atlas.toml`、`scan_repo()`、`run_init_or_update`、`Store::open` 与 `build_evidence`。\n",
+        );
+        body.push_str("\n## Claims\n");
+        body.push_str("- 分层为 crates 边界，见 `crates/atlas-core`。\n");
+        body.push_str("- 流水线入口是 `run_init_or_update`。\n");
+        body.push_str("- 配置加载在 `AtlasConfig::load`。\n");
+        body.push_str("- 存储由 `Store::open` 打开。\n");
+        body.push_str("- HTTP 服务入口是 `atlas-server::serve`。\n");
         body
     }
 }
